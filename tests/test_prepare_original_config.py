@@ -12,7 +12,7 @@ def test_materialize_config_absolutizes_biopathnet_paths():
     root_path.mkdir(parents=True, exist_ok=True)
     config_path = root_path / "configs" / "smoke.yaml"
     output_path = root_path / "results" / "runtime_configs" / "smoke.yaml"
-    config_path.parent.mkdir(parents=True)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
         "\n".join(
             [
