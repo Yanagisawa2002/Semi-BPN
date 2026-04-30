@@ -1,0 +1,61 @@
+dataset:
+  class: biomedical
+  path: data/cloud_run/biopathnet_path_subgraph_k50_fallback
+  files: ["train1.txt", "train2.txt", "valid.txt", "test.txt"]
+  include_factgraph: true
+
+task:
+  class: KnowledgeGraphCompletionBiomed
+  model:
+    class: NBFNet
+    input_dim: 32
+    hidden_dims: [32, 32]
+    message_func: distmult
+    aggregate_func: pna
+    short_cut: true
+    layer_norm: true
+    dependent: true
+    symmetric: false
+  criterion: bce
+  num_negative: 4
+  strict_negative: true
+  heterogeneous_negative: true
+  heterogeneous_evaluation: true
+  full_batch_eval: false
+  adversarial_temperature: 0.5
+  sample_weight: false
+  remove_pos: true
+  train2_in_factgraph: false
+
+optimizer:
+  class: Adam
+  lr: 0.005
+
+engine:
+  gpus: [0]
+  batch_size: 1
+
+train:
+  num_epoch: 50
+
+metric: mrr
+output_dir: results/biopathnet_linux_subgraph_k50_fallback_formal_d32
+
+runtime:
+  skip_eval: true
+  skip_final_eval: true
+  validation_interval: 10
+  eval_num_negative: 4096
+  early_stop_patience: 2
+  early_stop_min_delta: 0.0
+  progress_bar: true
+  progress_log_interval: 100
+  pairwise_eval:
+    enabled: true
+    split_dir: data/cloud_run/splits
+    output_dir: results/biopathnet_linux_subgraph_k50_fallback_formal_d32/pairwise_validation
+    relation_name: affects_endpoint
+    batch_size: 16
+    k_values: [1, 5, 10]
+    group_by: endpoint_id
+    selection_metric: auprc

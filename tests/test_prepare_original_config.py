@@ -21,6 +21,11 @@ def test_materialize_config_absolutizes_biopathnet_paths():
                 "  class: biomedical",
                 "  path: data/cloud_run/biopathnet_full",
                 "  files: ['train1.txt']",
+                "runtime:",
+                "  pairwise_eval:",
+                "    enabled: true",
+                "    split_dir: data/cloud_run/splits",
+                "    output_dir: results/smoke_pairwise",
             ]
         ),
         encoding="utf-8",
@@ -32,6 +37,8 @@ def test_materialize_config_absolutizes_biopathnet_paths():
         root_path / "data" / "cloud_run" / "biopathnet_full"
     )
     assert config["output_dir"] == str(root_path / "results" / "smoke")
+    assert config["runtime"]["pairwise_eval"]["split_dir"] == str(root_path / "data" / "cloud_run" / "splits")
+    assert config["runtime"]["pairwise_eval"]["output_dir"] == str(root_path / "results" / "smoke_pairwise")
 
     saved = yaml.safe_load(output_path.read_text(encoding="utf-8"))
     assert saved == config

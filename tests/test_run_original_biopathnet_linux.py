@@ -7,6 +7,7 @@ from mechrep.training.run_original_biopathnet_linux import (
     _evaluate_with_runtime_controls,
     _load_trusted_torch_checkpoint,
     _runtime_options_from_config,
+    _training_step_interval,
     _uses_runtime_controls,
     original_biopathnet_root,
     original_run_script,
@@ -43,6 +44,11 @@ def test_runtime_control_helpers_parse_skip_eval():
                     "  eval_num_negative: 4096",
                     "  progress_bar: true",
                     "  progress_log_interval: 100",
+                    "  skip_final_eval: true",
+                    "  validation_interval: 10",
+                    "  pairwise_eval:",
+                    "    enabled: true",
+                    "    selection_metric: auprc",
                 ]
             ),
             encoding="utf-8",
@@ -55,9 +61,16 @@ def test_runtime_control_helpers_parse_skip_eval():
             "eval_num_negative": 4096,
             "progress_bar": True,
             "progress_log_interval": 100,
+            "skip_final_eval": True,
+            "validation_interval": 10,
+            "pairwise_eval": {
+                "enabled": True,
+                "selection_metric": "auprc",
+            },
         }
         assert _uses_runtime_controls(runtime)
         assert _uses_runtime_controls({"progress_log_interval": 100})
+        assert _uses_runtime_controls({"pairwise_eval": {"enabled": True}})
         assert not _uses_runtime_controls({})
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -91,6 +104,11 @@ def test_eval_num_negative_is_temporary():
     assert metric == {"mrr": 0.0}
     assert solver.seen == ("valid", 4096)
     assert solver.model.num_negative == 4
+
+
+def test_training_step_interval_uses_validation_interval():
+    assert _training_step_interval(50, 10) == 10
+    assert _training_step_interval(20, None) == 2
 
 
 def test_trusted_checkpoint_loader_disables_weights_only_when_supported():

@@ -162,10 +162,13 @@ def _runtime_options_from_config(config_path: Path | None) -> dict[str, Any]:
 def _uses_runtime_controls(runtime: dict[str, Any]) -> bool:
     return (
         bool(runtime.get("skip_eval", False))
+        or bool(runtime.get("skip_final_eval", False))
         or runtime.get("eval_num_negative") is not None
         or runtime.get("progress_bar") is not None
         or runtime.get("progress_log_interval") is not None
         or runtime.get("early_stop_patience") is not None
+        or runtime.get("validation_interval") is not None
+        or bool((runtime.get("pairwise_eval") or {}).get("enabled", False))
     )
 
 
@@ -355,23 +358,176 @@ def _evaluate_with_runtime_controls(solver, split: str, *, eval_num_negative: in
             solver.model.num_negative = old_num_negative
 
 
+def _write_pairwise_predictions(path: str | Path, rows: list[dict]) -> None:
+    import csv
+
+    columns = ("pair_id", "drug_id", "endpoint_id", "label", "score", "split")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _score_pairwise_records(
+    records,
+    *,
+    dataset,
+    solver,
+    relation_name: str,
+    split: str,
+    batch_size: int,
+) -> list[dict]:
+    import torch
+
+    if relation_name not in dataset.inv_relation_vocab:
+        raise ValueError(f"Relation {relation_name!r} is missing from BioPathNet relation vocabulary")
+    if batch_size <= 0:
+        raise ValueError(f"pairwise_eval.batch_size must be positive, got {batch_size}")
+
+    missing = []
+    for record in records:
+        if record.drug_id not in dataset.inv_entity_vocab:
+            missing.append((record.pair_id, "drug_id", record.drug_id))
+        if record.endpoint_id not in dataset.inv_entity_vocab:
+            missing.append((record.pair_id, "endpoint_id", record.endpoint_id))
+        if len(missing) >= 10:
+            break
+    if missing:
+        raise ValueError(f"Split {split!r} contains pairs with entities missing from BioPathNet graph: {missing}")
+
+    relation_index = dataset.inv_relation_vocab[relation_name]
+    task = solver.model
+    task.eval()
+    graph = task.fact_graph
+    rows = []
+    with torch.no_grad():
+        for start in range(0, len(records), batch_size):
+            batch = records[start : start + batch_size]
+            h_index = torch.tensor(
+                [dataset.inv_entity_vocab[record.drug_id] for record in batch],
+                dtype=torch.long,
+                device=solver.device,
+            ).unsqueeze(-1)
+            t_index = torch.tensor(
+                [dataset.inv_entity_vocab[record.endpoint_id] for record in batch],
+                dtype=torch.long,
+                device=solver.device,
+            ).unsqueeze(-1)
+            r_index = torch.full((len(batch), 1), relation_index, dtype=torch.long, device=solver.device)
+            logits = task.model(graph, h_index, t_index, r_index)
+            scores = torch.sigmoid(logits.squeeze(-1)).detach().cpu().tolist()
+            for record, score in zip(batch, scores):
+                rows.append(
+                    {
+                        "pair_id": record.pair_id,
+                        "drug_id": record.drug_id,
+                        "endpoint_id": record.endpoint_id,
+                        "label": str(record.label),
+                        "score": f"{float(score):.8f}",
+                        "split": split,
+                    }
+                )
+    return rows
+
+
+def _evaluate_pairwise_with_runtime_controls(
+    *,
+    dataset,
+    solver,
+    split: str,
+    epoch: int,
+    pairwise_eval: dict[str, Any],
+    logger,
+) -> dict:
+    import json
+
+    from mechrep.data.build_pairs import read_pair_tsv
+    from mechrep.evaluation.eval_prediction import evaluate_predictions, write_metrics_json
+
+    split_dir = pairwise_eval.get("split_dir")
+    if not split_dir:
+        raise ValueError("runtime.pairwise_eval.enabled=true requires pairwise_eval.split_dir")
+    relation_name = pairwise_eval.get("relation_name", "affects_endpoint")
+    batch_size = int(pairwise_eval.get("batch_size", 16))
+    k_values = [int(value) for value in pairwise_eval.get("k_values", [1, 5, 10])]
+    group_by = pairwise_eval.get("group_by", "endpoint_id")
+    if group_by in ("", "none", "None", None):
+        group_by = None
+
+    records = read_pair_tsv(Path(split_dir) / f"{split}.tsv", split=split)
+    rows = _score_pairwise_records(
+        records,
+        dataset=dataset,
+        solver=solver,
+        relation_name=relation_name,
+        split=split,
+        batch_size=batch_size,
+    )
+    metrics = evaluate_predictions(rows, k_values=k_values, group_by=group_by)
+    metrics["num_examples"] = len(rows)
+    metrics["num_positive"] = sum(int(row["label"]) for row in rows)
+    metrics["num_negative"] = len(rows) - metrics["num_positive"]
+    metrics["epoch"] = int(epoch)
+
+    output_dir = Path(pairwise_eval.get("output_dir", "pairwise_eval"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    predictions_path = output_dir / f"predictions_{split}_epoch_{epoch}.tsv"
+    metrics_path = output_dir / f"metrics_{split}_epoch_{epoch}.json"
+    _write_pairwise_predictions(predictions_path, rows)
+    write_metrics_json(metrics_path, metrics)
+    with (output_dir / f"summary_{split}_epoch_{epoch}.json").open("w", encoding="utf-8") as handle:
+        json.dump(
+            {
+                "epoch": int(epoch),
+                "split": split,
+                "predictions": str(predictions_path),
+                "metrics": str(metrics_path),
+                "metrics_summary": metrics,
+            },
+            handle,
+            indent=2,
+            sort_keys=True,
+        )
+        handle.write("\n")
+    logger.warning("Runtime pairwise %s epoch %d: AUROC %.5g AUPRC %.5g", split, epoch, metrics["auroc"], metrics["auprc"])
+    return metrics
+
+
+def _training_step_interval(num_epoch: int, validation_interval: int | None) -> int:
+    if num_epoch <= 0:
+        return 0
+    if validation_interval is None:
+        return math.ceil(num_epoch / 10)
+    validation_interval = int(validation_interval)
+    if validation_interval <= 0:
+        raise ValueError(f"runtime.validation_interval must be positive, got {validation_interval}")
+    return validation_interval
+
+
 def _train_and_validate_with_runtime_controls(
     cfg,
+    dataset,
     solver,
     *,
     skip_eval: bool,
     eval_num_negative: int | None,
     early_stop_patience: int | None,
     early_stop_min_delta: float,
+    validation_interval: int | None,
+    pairwise_eval: dict[str, Any],
     logger,
 ):
     if cfg.train.num_epoch == 0:
         return solver
 
-    step = math.ceil(cfg.train.num_epoch / 10)
+    step = _training_step_interval(cfg.train.num_epoch, validation_interval)
     best_result = float("-inf")
     best_epoch = -1
     bad_validations = 0
+    pairwise_eval_enabled = bool(pairwise_eval.get("enabled", False))
+    selection_metric = pairwise_eval.get("selection_metric", cfg.metric)
 
     for index in range(0, cfg.train.num_epoch, step):
         kwargs = cfg.train.copy()
@@ -379,17 +535,31 @@ def _train_and_validate_with_runtime_controls(
         solver.model.split = "train"
         solver.train(**kwargs)
         solver.save("model_epoch_%d.pth" % solver.epoch)
-        if skip_eval:
+        if pairwise_eval_enabled:
+            solver.model.split = "valid"
+            metric = _evaluate_pairwise_with_runtime_controls(
+                dataset=dataset,
+                solver=solver,
+                split="valid",
+                epoch=solver.epoch,
+                pairwise_eval=pairwise_eval,
+                logger=logger,
+            )
+            if selection_metric not in metric:
+                raise ValueError(f"runtime.pairwise_eval.selection_metric {selection_metric!r} is unavailable")
+            result = metric[selection_metric]
+        elif skip_eval:
             logger.warning("Runtime skip_eval=true: skip validation after epoch %d", solver.epoch)
             continue
-        solver.model.split = "valid"
-        metric = _evaluate_with_runtime_controls(
-            solver,
-            "valid",
-            eval_num_negative=eval_num_negative,
-            logger=logger,
-        )
-        result = metric[cfg.metric]
+        else:
+            solver.model.split = "valid"
+            metric = _evaluate_with_runtime_controls(
+                solver,
+                "valid",
+                eval_num_negative=eval_num_negative,
+                logger=logger,
+            )
+            result = metric[cfg.metric]
         if result > best_result + early_stop_min_delta:
             best_result = result
             best_epoch = solver.epoch
@@ -399,19 +569,19 @@ def _train_and_validate_with_runtime_controls(
             if early_stop_patience is not None and bad_validations >= early_stop_patience:
                 logger.warning(
                     "Runtime early stopping: no %s improvement for %d validation checks; best epoch %d",
-                    cfg.metric,
+                    selection_metric if pairwise_eval_enabled else cfg.metric,
                     bad_validations,
                     best_epoch,
                 )
                 break
 
-    if not skip_eval and best_epoch >= 0:
+    if (pairwise_eval_enabled or not skip_eval) and best_epoch >= 0:
         _solver_load_without_graphs(solver, "model_epoch_%d.pth" % best_epoch)
     return solver
 
 
-def _test_with_runtime_controls(solver, *, skip_eval: bool, eval_num_negative: int | None, logger) -> None:
-    if skip_eval:
+def _test_with_runtime_controls(solver, *, skip_eval: bool, skip_final_eval: bool, eval_num_negative: int | None, logger) -> None:
+    if skip_eval or skip_final_eval:
         logger.warning("Runtime skip_eval=true: skip final valid/test evaluation")
         return
     solver.model.split = "valid"
@@ -467,19 +637,30 @@ def _run_original_with_runtime_controls(runtime: dict[str, Any]) -> None:
     if early_stop_patience is not None:
         early_stop_patience = int(early_stop_patience)
     early_stop_min_delta = float(runtime.get("early_stop_min_delta", 0.0))
+    validation_interval = runtime.get("validation_interval")
+    if validation_interval is not None:
+        validation_interval = int(validation_interval)
+    skip_final_eval = bool(runtime.get("skip_final_eval", False))
+    pairwise_eval = runtime.get("pairwise_eval") or {}
+    if not isinstance(pairwise_eval, dict):
+        raise ValueError("runtime.pairwise_eval must be a mapping")
 
     _train_and_validate_with_runtime_controls(
         cfg,
+        dataset,
         solver,
         skip_eval=skip_eval,
         eval_num_negative=eval_num_negative,
         early_stop_patience=early_stop_patience,
         early_stop_min_delta=early_stop_min_delta,
+        validation_interval=validation_interval,
+        pairwise_eval=pairwise_eval,
         logger=logger,
     )
     _test_with_runtime_controls(
         solver,
         skip_eval=skip_eval,
+        skip_final_eval=skip_final_eval,
         eval_num_negative=eval_num_negative,
         logger=logger,
     )

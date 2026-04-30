@@ -39,6 +39,14 @@ def materialize_config(config_path: Path, output_path: Path, root: Path) -> dict
     if config.get("output_dir"):
         config["output_dir"] = _absolute_path(str(config["output_dir"]), root)
 
+    runtime = config.get("runtime")
+    if isinstance(runtime, dict):
+        pairwise_eval = runtime.get("pairwise_eval")
+        if isinstance(pairwise_eval, dict):
+            for key in ("split_dir", "output_dir"):
+                if pairwise_eval.get(key):
+                    pairwise_eval[key] = _absolute_path(str(pairwise_eval[key]), root)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
