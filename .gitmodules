@@ -1,0 +1,4 @@
+[submodule "biopathnet/original"]
+	path = biopathnet/original
+	url = https://github.com/emyyue/BioPathNet.git
+	branch = main

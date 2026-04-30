@@ -1,0 +1,44 @@
+experiment:
+  name: cloud_gold_template_endpoint_ood
+  seed: 42
+  output_dir: results/cloud_gold_template/
+
+data:
+  kg_path: data/cloud_run/biopathnet_full/train1.txt
+  split_dir: data/cloud_run/splits/
+  train_file: data/cloud_run/splits/train.tsv
+  valid_file: data/cloud_run/splits/valid.tsv
+  test_file: data/cloud_run/splits/test.tsv
+
+templates:
+  template_table: data/cloud_run/templates/templates.tsv
+  train_labels: data/cloud_run/templates/gold_template_labels_train.tsv
+  valid_labels: data/cloud_run/templates/gold_template_labels_valid.tsv
+  test_labels: data/cloud_run/templates/gold_template_labels_test.tsv
+  use_train_templates_only: true
+  unknown_template_policy: error
+
+model:
+  base_model: biopathnet
+  template_head: true
+  embedding_dim: 64
+  hidden_dim: 256
+  dropout: 0.0
+
+loss:
+  lambda_gold: 1.0
+
+training:
+  epochs: 50
+  batch_size: 128
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  early_stopping_metric: valid_auprc
+  patience: 10
+
+evaluation:
+  k_values: [10, 50, 100]
+  group_by: endpoint_id
+
+toy_data:
+  create_if_missing: false

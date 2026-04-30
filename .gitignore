@@ -1,0 +1,33 @@
+# Python / test cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+
+# Runtime caches
+.torch_extensions/
+.torch_extensions_*/
+.torch_extensions_linux/
+
+# Local environments and dependencies
+.venv/
+venv/
+env/
+deps/
+biopathnet/_download/
+
+# Large local data and generated outputs are synchronized separately.
+data/
+results/
+all_data(indication_only)/
+
+# Model artifacts
+*.pt
+*.pth
+*.ckpt
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

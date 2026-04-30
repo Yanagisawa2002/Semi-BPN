@@ -1,0 +1,38 @@
+experiment:
+  name: cloud_pseudo_template_assignment_tau_match_0p85
+  seed: 42
+  output_dir: results/cloud_pseudo_template_main/
+
+data:
+  split_dir: data/cloud_run/splits/
+  train_file: data/cloud_run/splits/train.tsv
+  valid_file: data/cloud_run/splits/valid.tsv
+  test_file: data/cloud_run/splits/test.tsv
+
+templates:
+  template_table: data/cloud_run/templates/templates.tsv
+  template_vocab: data/cloud_run/gold_template/template_vocab.json
+  gold_labels_train: data/cloud_run/templates/gold_template_labels_train.tsv
+  gold_labels_valid: data/cloud_run/templates/gold_template_labels_valid.tsv
+  gold_labels_test: data/cloud_run/templates/gold_template_labels_test.tsv
+
+predictions:
+  train_predictions: data/cloud_run/gold_template/predictions_train.tsv
+  valid_predictions: data/cloud_run/gold_template/predictions_valid.tsv
+  test_predictions: data/cloud_run/gold_template/predictions_test.tsv
+
+evidence_paths:
+  train_paths: data/cloud_run/gold_template/evidence_paths_train.tsv
+
+matching:
+  alpha_node: 0.4
+  alpha_relation: 0.6
+
+pseudo_assignment:
+  assignment_splits: ["train"]
+  tau_pair: 0.7
+  tau_match: 0.85
+  tau_confidence: 0.75
+  w_pair: 0.4
+  w_match: 0.4
+  w_path: 0.2

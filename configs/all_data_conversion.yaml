@@ -1,0 +1,7 @@
+all_data_dir: all_data(indication_only)
+output_dir: data/all_data_unified
+seed: 1024
+negative_ratio: 1.0
+valid_ratio: 0.1
+test_ratio: 0.2
+remove_prediction_edges_from_kg: true

@@ -1,0 +1,8 @@
+source_dir: data/all_data_unified/biopathnet
+output_dir: data/all_data_unified/biopathnet_full
+conversion_report: data/all_data_unified/conversion_report.json
+files:
+  - train1.txt
+  - train2.txt
+  - valid.txt
+  - test.txt

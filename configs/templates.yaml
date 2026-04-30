@@ -1,0 +1,7 @@
+gold_path_file: data/all_data_unified/gold_paths.tsv
+pair_split_dir: data/all_data_unified/splits/
+output_dir: results/templates/
+min_support: 1
+extract_from: train_only
+delimiter: "\t"
+sequence_separator: "|"

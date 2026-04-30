@@ -1,0 +1,27 @@
+seed: 1024
+output_dir: results/cloud_baseline
+
+data:
+  split_dir: data/cloud_run/splits
+
+kg:
+  path: data/cloud_run/biopathnet_full/train1.txt
+  required: false
+
+adapter:
+  relation_name: affects_endpoint
+
+model:
+  embedding_dim: 16
+
+training:
+  epochs: 50
+  learning_rate: 0.05
+  weight_decay: 0.0
+
+evaluation:
+  k_values: [10, 50, 100]
+  group_by: endpoint_id
+
+toy_data:
+  create_if_missing: false

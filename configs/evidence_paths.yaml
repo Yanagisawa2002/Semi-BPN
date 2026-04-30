@@ -1,0 +1,53 @@
+data:
+  kg_train: data/all_data_unified/biopathnet/train1.txt
+  train_pairs: data/all_data_unified/splits/train.tsv
+  gold_labels_train: results/templates/gold_template_labels_train.tsv
+  entity_types: data/all_data_unified/biopathnet/entity_types.txt
+  conversion_report: data/all_data_unified/conversion_report.json
+
+output:
+  train_paths: results/gold_template/evidence_paths_train.tsv
+
+relation_mapping:
+  enabled: true
+  path: configs/primekg_to_mechanism_relations.yaml
+
+retrieval:
+  include_gold_pairs: false
+  max_paths_per_pair: 50
+  max_first_hops_per_pair: 400
+  max_guided_first_hops_per_pair: 80
+  max_endpoint_predecessors_per_pair: 200
+  max_guided_depth: 5
+  max_guided_edges_per_node: 30
+  max_candidate_paths_per_pair: 600
+  mechanism_node_bonus: 0.15
+  guided_seed_relations:
+    - drug_protein
+    - drug_effect
+  guided_seed_node_types:
+    - Gene
+    - Protein
+    - GeneFamily
+    - Phenotype
+  guided_relations:
+    - protein_protein
+    - bioprocess_protein
+    - molfunc_protein
+    - cellcomp_protein
+    - pathway_protein
+    - phenotype_protein
+    - bioprocess_bioprocess
+    - molfunc_molfunc
+    - cellcomp_cellcomp
+    - pathway_pathway
+    - phenotype_phenotype
+  guided_node_types:
+    - Gene
+    - Protein
+    - GeneFamily
+    - BiologicalProcess
+    - MolecularFunction
+    - CellularComponent
+    - Phenotype
+    - Pathway

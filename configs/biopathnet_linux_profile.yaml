@@ -1,0 +1,44 @@
+output_dir: results/biopathnet_linux_profile
+
+dataset:
+  class: biomedical
+  path: data/cloud_run/biopathnet_full
+  include_factgraph: yes
+  files: ['train1.txt', 'train2.txt', 'valid.txt', 'test.txt']
+
+task:
+  class: KnowledgeGraphCompletionBiomed
+  model:
+    class: NBFNet
+    input_dim: 16
+    hidden_dims: [16, 16]
+    message_func: distmult
+    aggregate_func: pna
+    short_cut: yes
+    layer_norm: yes
+    dependent: yes
+    symmetric: no
+  criterion: bce
+  num_negative: 4
+  strict_negative: yes
+  adversarial_temperature: 0.5
+  sample_weight: no
+  heterogeneous_negative: yes
+  heterogeneous_evaluation: yes
+  full_batch_eval: no
+  train2_in_factgraph: no
+  remove_pos: yes
+
+optimizer:
+  class: Adam
+  lr: 5.0e-3
+
+engine:
+  gpus: [0]
+  batch_size: 1
+
+train:
+  num_epoch: 1000
+
+fast_test: 16
+metric: mrr

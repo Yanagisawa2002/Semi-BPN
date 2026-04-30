@@ -1,0 +1,210 @@
+# Explicit mapping from PrimeKG/BioPathNet evidence-path relation names to
+# mechanism-template relation names. Context-specific entries take precedence
+# over generic by_relation entries.
+#
+# These defaults are conservative, hand-auditable bridges between PrimeKG edge
+# families and the relation vocabulary observed in curated mechanism templates.
+
+by_context:
+  - source_type: Drug
+    relation: drug_protein
+    target_type: Gene
+    mapped_relation: decreases_activity_of
+  - source_type: Drug
+    relation: drug_protein
+    target_type: Protein
+    mapped_relation: decreases_activity_of
+  - source_type: Drug
+    relation: drug_protein
+    target_type: GeneFamily
+    mapped_relation: decreases_activity_of
+  - source_type: Gene
+    relation: disease_protein
+    target_type: Endpoint
+    mapped_relation: positively_correlated_with
+  - source_type: Protein
+    relation: disease_protein
+    target_type: Endpoint
+    mapped_relation: causes
+  - source_type: Gene
+    relation: phenotype_protein
+    target_type: Phenotype
+    mapped_relation: has_phenotype
+  - source_type: Phenotype
+    relation: phenotype_protein
+    target_type: Gene
+    mapped_relation: positively_correlated_with
+  - source_type: Gene
+    relation: bioprocess_protein
+    target_type: BiologicalProcess
+    mapped_relation: positively_regulates
+  - source_type: Protein
+    relation: bioprocess_protein
+    target_type: BiologicalProcess
+    mapped_relation: positively_regulates
+  - source_type: GeneFamily
+    relation: bioprocess_protein
+    target_type: BiologicalProcess
+    mapped_relation: positively_regulates
+  - source_type: BiologicalProcess
+    relation: bioprocess_protein
+    target_type: Gene
+    mapped_relation: positively_regulates
+  - source_type: BiologicalProcess
+    relation: bioprocess_protein
+    target_type: Protein
+    mapped_relation: positively_regulates
+  - source_type: BiologicalProcess
+    relation: bioprocess_protein
+    target_type: GeneFamily
+    mapped_relation: positively_regulates
+  - source_type: Gene
+    relation: molfunc_protein
+    target_type: MolecularFunction
+    mapped_relation: positively_regulates
+  - source_type: Protein
+    relation: molfunc_protein
+    target_type: MolecularFunction
+    mapped_relation: positively_regulates
+  - source_type: GeneFamily
+    relation: molfunc_protein
+    target_type: MolecularFunction
+    mapped_relation: positively_regulates
+  - source_type: MolecularFunction
+    relation: molfunc_protein
+    target_type: Gene
+    mapped_relation: participates_in
+  - source_type: MolecularFunction
+    relation: molfunc_protein
+    target_type: Protein
+    mapped_relation: participates_in
+  - source_type: MolecularFunction
+    relation: molfunc_protein
+    target_type: GeneFamily
+    mapped_relation: participates_in
+  - source_type: Gene
+    relation: cellcomp_protein
+    target_type: CellularComponent
+    mapped_relation: located_in
+  - source_type: Protein
+    relation: cellcomp_protein
+    target_type: CellularComponent
+    mapped_relation: located_in
+  - source_type: GeneFamily
+    relation: cellcomp_protein
+    target_type: CellularComponent
+    mapped_relation: located_in
+  - source_type: CellularComponent
+    relation: cellcomp_protein
+    target_type: Gene
+    mapped_relation: location_of
+  - source_type: CellularComponent
+    relation: cellcomp_protein
+    target_type: Protein
+    mapped_relation: location_of
+  - source_type: CellularComponent
+    relation: cellcomp_protein
+    target_type: GeneFamily
+    mapped_relation: location_of
+  - source_type: Gene
+    relation: pathway_protein
+    target_type: Pathway
+    mapped_relation: participates_in
+  - source_type: Protein
+    relation: pathway_protein
+    target_type: Pathway
+    mapped_relation: participates_in
+  - source_type: GeneFamily
+    relation: pathway_protein
+    target_type: Pathway
+    mapped_relation: participates_in
+  - source_type: Pathway
+    relation: pathway_protein
+    target_type: Gene
+    mapped_relation: participates_in
+  - source_type: Pathway
+    relation: pathway_protein
+    target_type: Protein
+    mapped_relation: participates_in
+  - source_type: Pathway
+    relation: pathway_protein
+    target_type: GeneFamily
+    mapped_relation: participates_in
+  - source_type: BiologicalProcess
+    relation: bioprocess_bioprocess
+    target_type: BiologicalProcess
+    mapped_relation: positively_regulates
+  - source_type: MolecularFunction
+    relation: molfunc_molfunc
+    target_type: MolecularFunction
+    mapped_relation: positively_correlated_with
+  - source_type: CellularComponent
+    relation: cellcomp_cellcomp
+    target_type: CellularComponent
+    mapped_relation: part_of
+  - source_type: Pathway
+    relation: pathway_pathway
+    target_type: Pathway
+    mapped_relation: positively_correlated_with
+  - source_type: Phenotype
+    relation: disease_phenotype_positive
+    target_type: Endpoint
+    mapped_relation: manifestation_of
+  - source_type: Phenotype
+    relation: disease_phenotype_negative
+    target_type: Endpoint
+    mapped_relation: manifestation_of
+  - source_type: Drug
+    relation: drug_effect
+    target_type: Phenotype
+    mapped_relation: positively_correlated_with
+  - source_type: Gene
+    relation: protein_protein
+    target_type: Gene
+    mapped_relation: molecularly_interacts_with
+  - source_type: Disease
+    relation: disease_disease
+    target_type: Endpoint
+    mapped_relation: positively_correlated_with
+  - source_type: Phenotype
+    relation: phenotype_phenotype
+    target_type: Phenotype
+    mapped_relation: correlated_with
+  - source_type: Drug
+    relation: drug_drug
+    target_type: Drug
+    mapped_relation: positively_correlated_with
+  - source_type: Exposure
+    relation: exposure_disease
+    target_type: Endpoint
+    mapped_relation: positively_correlated_with
+  - source_type: Gene
+    relation: exposure_protein
+    target_type: Exposure
+    mapped_relation: positively_correlated_with
+  - source_type: Exposure
+    relation: exposure_protein
+    target_type: Gene
+    mapped_relation: positively_correlated_with
+
+by_relation:
+  disease_protein: positively_correlated_with
+  disease_phenotype_positive: manifestation_of
+  disease_phenotype_negative: manifestation_of
+  drug_protein: decreases_activity_of
+  drug_effect: positively_correlated_with
+  phenotype_protein: positively_correlated_with
+  bioprocess_protein: positively_regulates
+  molfunc_protein: positively_regulates
+  cellcomp_protein: located_in
+  pathway_protein: participates_in
+  bioprocess_bioprocess: positively_regulates
+  molfunc_molfunc: positively_correlated_with
+  cellcomp_cellcomp: part_of
+  pathway_pathway: positively_correlated_with
+  protein_protein: molecularly_interacts_with
+  disease_disease: positively_correlated_with
+  phenotype_phenotype: correlated_with
+  drug_drug: positively_correlated_with
+  exposure_disease: positively_correlated_with
+  exposure_protein: positively_correlated_with

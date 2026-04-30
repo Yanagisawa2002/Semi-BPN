@@ -1,0 +1,53 @@
+experiment:
+  name: semi_template_endpoint_ood_high_coverage_current332
+  seed: 42
+  output_dir: results/semi_template_high_coverage/
+
+data:
+  kg_path: data/all_data_unified/biopathnet/train1.txt
+  split_dir: data/all_data_unified/splits/
+  train_file: data/all_data_unified/splits/train.tsv
+  valid_file: data/all_data_unified/splits/valid.tsv
+  test_file: data/all_data_unified/splits/test.tsv
+
+templates:
+  template_table: results/templates/templates.tsv
+  template_vocab: results/gold_template/template_vocab.json
+  gold_labels_train: results/templates/gold_template_labels_train.tsv
+  gold_labels_valid: results/templates/gold_template_labels_valid.tsv
+  gold_labels_test: results/templates/gold_template_labels_test.tsv
+  unknown_template_policy: error
+
+pseudo_templates:
+  pseudo_labels_train: results/pseudo_template/pseudo_template_labels_train.tsv
+  assignment_report: results/pseudo_template/assignment_report.json
+  use_pseudo_splits: ["train"]
+  frozen: true
+  allow_gold_pseudo_overlap: false
+  allow_test_pseudo: false
+
+model:
+  base_model: biopathnet
+  template_head: true
+  embedding_dim: 64
+  hidden_dim: 256
+  dropout: 0.0
+
+loss:
+  lambda_gold: 1.0
+  lambda_pseudo: 0.1
+
+training:
+  epochs: 50
+  batch_size: 128
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  early_stopping_metric: valid_auprc
+  patience: 10
+
+evaluation:
+  k_values: [10, 50, 100]
+  group_by: endpoint_id
+
+toy_data:
+  create_if_missing: false
