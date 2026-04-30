@@ -41,3 +41,7 @@ train:
 metric: mrr
 fast_test: 16
 output_dir: results/biopathnet_linux_subgraph_k50_fallback_profile
+
+runtime:
+  skip_eval: true
+  eval_num_negative: 4096

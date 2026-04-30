@@ -74,6 +74,19 @@ The smoke config is intentionally small:
 - `full_batch_eval: no`
 - `num_epoch: 1`
 
+Linux smoke / profile configs also include:
+
+```yaml
+runtime:
+  skip_eval: true
+  eval_num_negative: 4096
+```
+
+`skip_eval` stops the smoke run after training and checkpoint saving, avoiding
+the original full valid/test ranking pass. `eval_num_negative` is only used when
+evaluation is explicitly enabled; it increases the ranking chunk size without
+changing training negative sampling.
+
 ## 5. Run 5 Minute Profile
 
 ```bash

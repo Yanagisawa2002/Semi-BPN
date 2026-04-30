@@ -42,3 +42,7 @@ train:
 
 fast_test: 16
 metric: mrr
+
+runtime:
+  skip_eval: true
+  eval_num_negative: 4096

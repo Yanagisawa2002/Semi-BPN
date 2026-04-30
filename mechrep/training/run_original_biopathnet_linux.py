@@ -8,9 +8,15 @@ to ``biopathnet/original/script/run.py`` unchanged.
 from __future__ import annotations
 
 import os
+import math
+import pprint
+import random
 import runpy
 import sys
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 
 def repository_root() -> Path:
@@ -131,12 +137,177 @@ def _patch_torchdrug_extension_compatibility() -> None:
             header.write_text(patched, encoding="utf-8")
 
 
+def _config_path_from_argv(argv: list[str]) -> Path | None:
+    for index, value in enumerate(argv):
+        if value in {"-c", "--config"} and index + 1 < len(argv):
+            return Path(argv[index + 1])
+        if value.startswith("--config="):
+            return Path(value.split("=", 1)[1])
+    return None
+
+
+def _runtime_options_from_config(config_path: Path | None) -> dict[str, Any]:
+    if config_path is None or not config_path.exists():
+        return {}
+    with config_path.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle)
+    if not isinstance(payload, dict):
+        return {}
+    runtime = payload.get("runtime") or {}
+    if not isinstance(runtime, dict):
+        raise ValueError("runtime config must be a mapping")
+    return runtime
+
+
+def _uses_runtime_controls(runtime: dict[str, Any]) -> bool:
+    return bool(runtime.get("skip_eval", False)) or runtime.get("eval_num_negative") is not None
+
+
+def _solver_load_without_graphs(solver, checkpoint: str, *, load_optimizer: bool = True) -> None:
+    import torch
+    from torchdrug.utils import comm
+
+    checkpoint = os.path.expanduser(checkpoint)
+    state = torch.load(checkpoint, map_location=solver.device)
+    for key in [
+        "fact_graph",
+        "fact_graph_supervision",
+        "graph",
+        "train_graph",
+        "valid_graph",
+        "test_graph",
+        "full_valid_graph",
+        "full_test_graph",
+    ]:
+        state["model"].pop(key, None)
+    solver.model.load_state_dict(state["model"], strict=False)
+
+    if load_optimizer:
+        solver.optimizer.load_state_dict(state["optimizer"])
+        for optimizer_state in solver.optimizer.state.values():
+            for key, value in optimizer_state.items():
+                if isinstance(value, torch.Tensor):
+                    optimizer_state[key] = value.to(solver.device)
+    comm.synchronize()
+
+
+def _evaluate_with_runtime_controls(solver, split: str, *, eval_num_negative: int | None, logger):
+    old_num_negative = getattr(solver.model, "num_negative", None)
+    if eval_num_negative is not None:
+        if eval_num_negative <= 0:
+            raise ValueError("runtime.eval_num_negative must be positive")
+        logger.warning("Runtime eval_num_negative: %d", eval_num_negative)
+        solver.model.num_negative = int(eval_num_negative)
+    try:
+        return solver.evaluate(split)
+    finally:
+        if eval_num_negative is not None and old_num_negative is not None:
+            solver.model.num_negative = old_num_negative
+
+
+def _train_and_validate_with_runtime_controls(cfg, solver, *, skip_eval: bool, eval_num_negative: int | None, logger):
+    if cfg.train.num_epoch == 0:
+        return solver
+
+    step = math.ceil(cfg.train.num_epoch / 10)
+    best_result = float("-inf")
+    best_epoch = -1
+
+    for index in range(0, cfg.train.num_epoch, step):
+        kwargs = cfg.train.copy()
+        kwargs["num_epoch"] = min(step, cfg.train.num_epoch - index)
+        solver.model.split = "train"
+        solver.train(**kwargs)
+        solver.save("model_epoch_%d.pth" % solver.epoch)
+        if skip_eval:
+            logger.warning("Runtime skip_eval=true: skip validation after epoch %d", solver.epoch)
+            continue
+        solver.model.split = "valid"
+        metric = _evaluate_with_runtime_controls(
+            solver,
+            "valid",
+            eval_num_negative=eval_num_negative,
+            logger=logger,
+        )
+        result = metric[cfg.metric]
+        if result > best_result:
+            best_result = result
+            best_epoch = solver.epoch
+
+    if not skip_eval:
+        _solver_load_without_graphs(solver, "model_epoch_%d.pth" % best_epoch)
+    return solver
+
+
+def _test_with_runtime_controls(solver, *, skip_eval: bool, eval_num_negative: int | None, logger) -> None:
+    if skip_eval:
+        logger.warning("Runtime skip_eval=true: skip final valid/test evaluation")
+        return
+    solver.model.split = "valid"
+    _evaluate_with_runtime_controls(solver, "valid", eval_num_negative=eval_num_negative, logger=logger)
+    solver.model.split = "test"
+    _evaluate_with_runtime_controls(solver, "test", eval_num_negative=eval_num_negative, logger=logger)
+
+
+def _run_original_with_runtime_controls(runtime: dict[str, Any]) -> None:
+    import numpy as np
+    import torch
+    from torchdrug import core
+    from torchdrug.utils import comm
+
+    from biopathnet import util
+
+    args, variables = util.parse_args()
+    cfg = util.load_config(args.config, context=variables)
+    working_dir = util.create_working_directory(cfg)
+    args.seed = int(args.seed)
+    seed_rank = args.seed + int(comm.get_rank())
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(seed_rank)
+
+    logger = util.get_root_logger()
+    logger.warning("Working directory: %s" % working_dir)
+    logger.warning("Input Seed: %d" % args.seed)
+    logger.warning("Set Seed: %d" % seed_rank)
+    if comm.get_rank() == 0:
+        logger.warning("Config file: %s" % args.config)
+        logger.warning(pprint.pformat(cfg))
+        logger.warning("Runtime controls: %s" % pprint.pformat(runtime))
+
+    dataset = core.Configurable.load_config_dict(cfg.dataset)
+    solver = util.build_solver(cfg, dataset)
+
+    skip_eval = bool(runtime.get("skip_eval", False))
+    eval_num_negative = runtime.get("eval_num_negative")
+    if eval_num_negative is not None:
+        eval_num_negative = int(eval_num_negative)
+
+    _train_and_validate_with_runtime_controls(
+        cfg,
+        solver,
+        skip_eval=skip_eval,
+        eval_num_negative=eval_num_negative,
+        logger=logger,
+    )
+    _test_with_runtime_controls(
+        solver,
+        skip_eval=skip_eval,
+        eval_num_negative=eval_num_negative,
+        logger=logger,
+    )
+
+
 def main() -> None:
     root = repository_root()
     prepare_environment(root)
     run_script = original_run_script(root)
     if not run_script.exists():
         raise FileNotFoundError(f"Original BioPathNet run script not found: {run_script}")
+    runtime = _runtime_options_from_config(_config_path_from_argv(sys.argv[1:]))
+    if _uses_runtime_controls(runtime):
+        _run_original_with_runtime_controls(runtime)
+        return
     sys.argv[0] = str(run_script)
     runpy.run_path(str(run_script), run_name="__main__")
 
