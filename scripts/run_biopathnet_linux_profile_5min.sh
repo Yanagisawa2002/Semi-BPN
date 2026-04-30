@@ -6,10 +6,16 @@ export PYTHONPATH="$PWD:$PWD/biopathnet/original:${PYTHONPATH:-}"
 export TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$PWD/.torch_extensions_linux}"
 PROFILE_SECONDS="${PROFILE_SECONDS:-300}"
 
+CONFIG_RUNTIME="$PWD/results/runtime_configs/biopathnet_linux_profile.yaml"
+python -m mechrep.training.prepare_original_config \
+  --config "$PWD/configs/biopathnet_linux_profile.yaml" \
+  --output "$CONFIG_RUNTIME" \
+  --root "$PWD"
+
 set +e
 timeout "$PROFILE_SECONDS" python -m mechrep.training.run_original_biopathnet_linux \
   -s 42 \
-  -c "$PWD/configs/biopathnet_linux_profile.yaml"
+  -c "$CONFIG_RUNTIME"
 status=$?
 set -e
 

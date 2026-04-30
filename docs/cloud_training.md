@@ -61,6 +61,11 @@ conda activate bpnver
 bash scripts/run_biopathnet_linux_smoke.sh
 ```
 
+The script writes a runtime config under `results/runtime_configs/` with
+absolute `dataset.path` and `output_dir` values. This is needed because the
+original BioPathNet script changes into the experiment output directory before
+loading data.
+
 The smoke config is intentionally small:
 
 - `batch_size: 1`
