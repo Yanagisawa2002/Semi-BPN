@@ -189,7 +189,7 @@ def train_model(
     patience: int | None = None,
     min_delta: float = 0.0,
     progress_bar: bool = True,
-) -> List[float]:
+) -> dict:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     criterion = nn.BCEWithLogitsLoss()
     drug_index, endpoint_index, labels = records_to_tensors(train_records, drug_to_index, endpoint_to_index)
@@ -197,6 +197,8 @@ def train_model(
     stopper = EarlyStopper(early_stopping_metric, patience, min_delta=min_delta)
     monitor_key = normalize_monitor_metric(early_stopping_metric or "")
     best_state = None
+    best_epoch = None
+    best_loss = None
 
     for epoch in iter_progress(range(epochs), enabled=progress_bar, desc="baseline train", unit="epoch"):
         model.train()
@@ -223,12 +225,20 @@ def train_model(
             improved, should_stop = stopper.observe(float(valid_metrics[monitor_key]), epoch=epoch + 1)
             if improved:
                 best_state = copy.deepcopy(model.state_dict())
+                best_epoch = epoch + 1
+                best_loss = losses[-1]
             if should_stop:
                 break
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    return losses
+    selected_epoch = best_epoch if best_epoch is not None else len(losses)
+    selected_loss = best_loss if best_loss is not None else (losses[-1] if losses else None)
+    return {
+        "losses": losses,
+        "selected_epoch": selected_epoch,
+        "selected_loss": selected_loss,
+    }
 
 
 def evaluate_split(
@@ -274,7 +284,7 @@ def run_baseline(config: dict, *, create_toy_data_if_missing: bool = False) -> d
     if group_by in ("", "none", "None", None):
         group_by = None
 
-    losses = train_model(
+    training_result = train_model(
         model,
         adapter.records("train"),
         drug_to_index,
@@ -290,6 +300,7 @@ def run_baseline(config: dict, *, create_toy_data_if_missing: bool = False) -> d
         min_delta=float(training_config.get("min_delta", 0.0)),
         progress_bar=bool(training_config.get("progress_bar", True)),
     )
+    losses = training_result["losses"]
 
     prediction_rows = {}
     metrics = {}
@@ -304,7 +315,8 @@ def run_baseline(config: dict, *, create_toy_data_if_missing: bool = False) -> d
         )
         metrics[split]["num_examples"] = len(adapter.records(split))
         if split == "train":
-            metrics[split]["final_loss"] = losses[-1] if losses else None
+            metrics[split]["final_loss"] = training_result["selected_loss"]
+            metrics[split]["selected_epoch"] = training_result["selected_epoch"]
         write_metrics_json(output_dir / f"metrics_{split}.json", metrics[split])
 
     write_predictions(output_dir / "predictions_test.tsv", prediction_rows["test"])
@@ -329,6 +341,7 @@ def run_baseline(config: dict, *, create_toy_data_if_missing: bool = False) -> d
         "adapter_positive_triple_counts": adapter_counts,
         "checkpoint_path": str(checkpoint_path),
         "backend": "pair_embedding_wrapper",
+        "training": training_result,
     }
     save_config(output_dir / "config.yaml", run_config)
     with (output_dir / "random_seed.json").open("w", encoding="utf-8") as handle:

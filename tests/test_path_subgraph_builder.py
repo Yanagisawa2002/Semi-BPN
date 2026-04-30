@@ -88,6 +88,7 @@ def test_build_path_subgraph_top_k_deduplicates_and_reports_coverage():
                     "split",
                 ],
                 ["P1", "D1", "E1", "g1", "D1|G1|E1", "Drug|Gene|Endpoint", "r1|r2", "train"],
+                ["P2", "D2", "E2", "g_valid", "D2|G3|E2", "Drug|Gene|Endpoint", "r5|r6", "valid"],
             ],
         )
 
@@ -111,6 +112,7 @@ def test_build_path_subgraph_top_k_deduplicates_and_reports_coverage():
         assert _read_rows(out_dir / "entity_types.txt") == [("D1", "0"), ("G1", "1"), ("E1", "2")]
         assert report["leakage_checks"]["non_train_evidence_paths_selected"] == 0
         assert report["leakage_checks"]["non_train_gold_paths_added"] == 0
+        assert report["non_train_gold_paths_seen"] == 1
         assert report["leakage_checks"]["target_relation_edges_in_train1"] == 0
         assert report["gold_path_coverage"]["train"]["gold_path_coverage"] == 1.0
         assert report["gold_path_coverage"]["train"]["gold_edge_coverage"] == 1.0

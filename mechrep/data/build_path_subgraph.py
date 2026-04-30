@@ -602,10 +602,14 @@ def build_path_subgraph(config: dict) -> dict:
     gold_paths_file = config.get("gold_paths_file")
     train_gold_paths: list[EvidencePath] = []
     non_train_gold_paths_added = 0
+    non_train_gold_paths_seen = 0
     if include_train_gold_paths and gold_paths_file:
         all_gold_paths = read_gold_paths(gold_paths_file)
         train_gold_paths = [path for path in all_gold_paths if path.split == "train"]
-        non_train_gold_paths_added = sum(1 for path in all_gold_paths if path.split != "train" and path in train_gold_paths)
+        non_train_gold_paths_seen = sum(1 for path in all_gold_paths if path.split != "train")
+        non_train_gold_paths_added = sum(1 for path in train_gold_paths if path.split != "train")
+        if non_train_gold_paths_added:
+            raise ValueError("Non-train gold paths were selected for training subgraph construction")
         for path in train_gold_paths:
             edge_set.update(path.edges())
 
@@ -657,6 +661,7 @@ def build_path_subgraph(config: dict) -> dict:
         "selected_evidence_paths": len(selected_paths),
         "include_train_gold_paths": include_train_gold_paths,
         "train_gold_paths_added": len(train_gold_paths),
+        "non_train_gold_paths_seen": non_train_gold_paths_seen,
         "fallback_structural_support": fallback_report,
         "metadata": metadata_report,
         "selected_edges": len(edge_set),

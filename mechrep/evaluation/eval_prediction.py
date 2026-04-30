@@ -73,6 +73,46 @@ def _group_rows(rows: Sequence[dict], group_by: str | None) -> List[List[dict]]:
     return [groups[key] for key in sorted(groups)]
 
 
+def _median(values: Sequence[int]) -> float:
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[midpoint])
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def summarize_candidate_sets(
+    rows: Sequence[dict],
+    *,
+    group_by: str | None = None,
+    k_values: Sequence[int] = (),
+) -> dict:
+    if not rows:
+        raise ValueError("Cannot summarize an empty prediction set")
+    groups = _group_rows(rows, group_by)
+    candidate_counts = [len(group) for group in groups]
+    positive_counts = [sum(_as_label(row["label"]) for row in group) for group in groups]
+    summary = {
+        "group_by": group_by or "__all__",
+        "num_groups": len(groups),
+        "min_candidates_per_group": min(candidate_counts),
+        "median_candidates_per_group": _median(candidate_counts),
+        "mean_candidates_per_group": sum(candidate_counts) / len(candidate_counts),
+        "max_candidates_per_group": max(candidate_counts),
+        "min_positives_per_group": min(positive_counts),
+        "median_positives_per_group": _median(positive_counts),
+        "mean_positives_per_group": sum(positive_counts) / len(positive_counts),
+        "max_positives_per_group": max(positive_counts),
+    }
+    for k in k_values:
+        if k <= 0:
+            raise ValueError(f"K values must be positive, got {k}")
+        summary[f"fraction_groups_with_candidates_lte_{k}"] = (
+            sum(1 for count in candidate_counts if count <= k) / len(candidate_counts)
+        )
+    return summary
+
+
 def compute_topk_metrics(rows: Sequence[dict], k_values: Sequence[int], *, group_by: str | None = None) -> dict:
     if not rows:
         raise ValueError("Cannot evaluate an empty prediction set")
@@ -104,7 +144,7 @@ def compute_topk_metrics(rows: Sequence[dict], k_values: Sequence[int], *, group
 def evaluate_predictions(
     rows: Sequence[dict],
     *,
-    k_values: Sequence[int] = (10, 50, 100),
+    k_values: Sequence[int] = (1, 5, 10),
     group_by: str | None = None,
 ) -> dict:
     if not rows:
@@ -115,7 +155,19 @@ def evaluate_predictions(
     metrics = {
         "auroc": compute_auroc(labels, scores),
         "auprc": compute_average_precision(labels, scores),
+        "candidate_set": summarize_candidate_sets(rows, group_by=group_by, k_values=k_values),
     }
+    saturated_k = [
+        k
+        for k in k_values
+        if metrics["candidate_set"].get(f"fraction_groups_with_candidates_lte_{k}", 0.0) >= 0.5
+    ]
+    metrics["topk_warning"] = (
+        "Some requested K values cover at least half of grouped candidate sets; interpret large-K recall/hits "
+        "as candidate-set-limited rather than full drug-repurposing ranking."
+        if saturated_k
+        else None
+    )
     metrics.update(compute_topk_metrics(rows, k_values, group_by=group_by))
     return metrics
 
@@ -144,7 +196,7 @@ def write_metrics_json(path: str | Path, metrics: dict) -> None:
 def evaluate_prediction_file(
     predictions_path: str | Path,
     *,
-    k_values: Sequence[int] = (10, 50, 100),
+    k_values: Sequence[int] = (1, 5, 10),
     group_by: str | None = None,
 ) -> dict:
     return evaluate_predictions(read_prediction_tsv(predictions_path), k_values=k_values, group_by=group_by)
@@ -154,7 +206,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--predictions", required=True)
     parser.add_argument("--output-json")
-    parser.add_argument("--k", type=int, nargs="*", default=[10, 50, 100])
+    parser.add_argument("--k", type=int, nargs="*", default=[1, 5, 10])
     parser.add_argument("--group-by", default=None)
     return parser.parse_args()
 

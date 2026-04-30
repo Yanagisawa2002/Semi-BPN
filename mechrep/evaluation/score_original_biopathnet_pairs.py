@@ -6,8 +6,9 @@ import argparse
 import csv
 import json
 import random
+import re
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import yaml
 
@@ -34,6 +35,51 @@ def find_latest_checkpoint(search_dir: str | Path, pattern: str = "model_epoch_*
     if not candidates:
         raise FileNotFoundError(f"No checkpoint matching {pattern!r} found under {search_dir}")
     return candidates[-1]
+
+
+def checkpoint_epoch(path: str | Path) -> int | None:
+    match = re.search(r"model_epoch_(\d+)\.pth$", Path(path).name)
+    return int(match.group(1)) if match else None
+
+
+def find_checkpoints(search_dir: str | Path, pattern: str = "model_epoch_*.pth") -> list[Path]:
+    search_dir = Path(search_dir)
+    candidates = list(search_dir.rglob(pattern))
+    if not candidates:
+        raise FileNotFoundError(f"No checkpoint matching {pattern!r} found under {search_dir}")
+    return sorted(
+        candidates,
+        key=lambda path: (
+            checkpoint_epoch(path) if checkpoint_epoch(path) is not None else -1,
+            path.stat().st_mtime,
+            str(path),
+        ),
+    )
+
+
+def normalize_selection_metric(metric: str) -> str:
+    metric = metric.strip()
+    for prefix in ("train_", "valid_", "test_"):
+        if metric.startswith(prefix):
+            return metric[len(prefix) :]
+    return metric
+
+
+def selection_metric_mode(metric: str) -> str:
+    metric = normalize_selection_metric(metric).lower()
+    if "loss" in metric or metric in {"mr", "mean_rank"}:
+        return "min"
+    return "max"
+
+
+def _metric_is_better(value: float, best_value: float | None, mode: str) -> bool:
+    if best_value is None:
+        return True
+    if mode == "min":
+        return value < best_value
+    if mode == "max":
+        return value > best_value
+    raise ValueError(f"Unknown selection metric mode: {mode!r}")
 
 
 def infer_relation_name(dataset_dir: str | Path, train_file: str = "train2.txt") -> str:
@@ -150,10 +196,109 @@ def score_records(
     return rows
 
 
+def select_best_checkpoint_by_valid_metric(
+    *,
+    config_path: str | Path,
+    checkpoint_dir: str | Path,
+    split_dir: str | Path,
+    output_dir: str | Path | None,
+    relation_name: str | None,
+    batch_size: int,
+    k_values: Sequence[int],
+    group_by: str | None,
+    selection_metric: str,
+    checkpoint_pattern: str = "model_epoch_*.pth",
+    progress_bar: bool = False,
+) -> dict[str, Any]:
+    """Select a checkpoint by pairwise validation metrics without touching test labels."""
+
+    root = repository_root()
+    prepare_environment(root)
+    config_path = Path(config_path).resolve(strict=False)
+    config = load_yaml_config(config_path)
+    dataset_dir = Path(config["dataset"]["path"])
+    relation = relation_name or infer_relation_name(dataset_dir)
+    candidates = find_checkpoints(checkpoint_dir, pattern=checkpoint_pattern)
+    metric_key = normalize_selection_metric(selection_metric)
+    mode = selection_metric_mode(metric_key)
+
+    _, dataset, solver = _load_solver(config_path, candidates[0])
+    records = read_pair_tsv(Path(split_dir) / "valid.tsv", split="valid")
+
+    best_checkpoint = None
+    best_value = None
+    selection_rows = []
+    checkpoint_metrics = []
+    for checkpoint_path in candidates:
+        _solver_load_without_graphs(solver, str(checkpoint_path), load_optimizer=False)
+        solver.model.eval()
+        rows = score_records(
+            records,
+            dataset=dataset,
+            solver=solver,
+            relation_name=relation,
+            split="valid",
+            batch_size=batch_size,
+            progress_bar=progress_bar,
+        )
+        metrics = evaluate_predictions(rows, k_values=k_values, group_by=group_by)
+        if metric_key not in metrics or not isinstance(metrics[metric_key], (int, float)):
+            raise ValueError(f"Selection metric {metric_key!r} is not available as a scalar in validation metrics")
+        value = float(metrics[metric_key])
+        if _metric_is_better(value, best_value, mode):
+            best_checkpoint = checkpoint_path
+            best_value = value
+        selection_rows.append(
+            {
+                "checkpoint": str(checkpoint_path),
+                "epoch": "" if checkpoint_epoch(checkpoint_path) is None else str(checkpoint_epoch(checkpoint_path)),
+                metric_key: f"{value:.10g}",
+                "auroc": f"{float(metrics['auroc']):.10g}",
+                "auprc": f"{float(metrics['auprc']):.10g}",
+                "num_examples": str(len(rows)),
+            }
+        )
+        checkpoint_metrics.append(
+            {
+                "checkpoint": str(checkpoint_path),
+                "epoch": checkpoint_epoch(checkpoint_path),
+                "metrics": metrics,
+            }
+        )
+
+    if best_checkpoint is None or best_value is None:
+        raise RuntimeError("Checkpoint selection failed before evaluating any checkpoint")
+
+    output_path = Path(output_dir) if output_dir else best_checkpoint.parent / "pairwise_eval"
+    output_path.mkdir(parents=True, exist_ok=True)
+    report = {
+        "selection_metric": metric_key,
+        "selection_mode": mode,
+        "best_checkpoint": str(best_checkpoint),
+        "best_valid_metric": best_value,
+        "num_checkpoints_evaluated": len(candidates),
+        "checkpoints": checkpoint_metrics,
+        "output_dir": str(output_path),
+    }
+    with (output_path / "checkpoint_selection.json").open("w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    with (output_path / "checkpoint_selection.tsv").open("w", encoding="utf-8", newline="") as handle:
+        fieldnames = ["checkpoint", "epoch", metric_key, "auroc", "auprc", "num_examples"]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(selection_rows)
+    return report
+
+
 def run_pair_scoring(
     *,
     config_path: str | Path,
     checkpoint: str | Path | None,
+    checkpoint_dir: str | Path | None = None,
+    select_best_checkpoint: bool = False,
+    selection_metric: str = "auprc",
+    checkpoint_pattern: str = "model_epoch_*.pth",
     split_dir: str | Path,
     output_dir: str | Path | None,
     relation_name: str | None,
@@ -168,8 +313,28 @@ def run_pair_scoring(
     config_path = Path(config_path).resolve(strict=False)
     config = load_yaml_config(config_path)
     dataset_dir = Path(config["dataset"]["path"])
-    checkpoint_path = Path(checkpoint).resolve(strict=False) if checkpoint else find_latest_checkpoint(config["output_dir"])
-    output_path = Path(output_dir) if output_dir else checkpoint_path.parent / "pairwise_eval"
+    if select_best_checkpoint:
+        if checkpoint is not None:
+            raise ValueError("--checkpoint and --select-best-checkpoint are mutually exclusive")
+        search_dir = checkpoint_dir or config["output_dir"]
+        selection_report = select_best_checkpoint_by_valid_metric(
+            config_path=config_path,
+            checkpoint_dir=search_dir,
+            split_dir=split_dir,
+            output_dir=output_dir,
+            relation_name=relation_name,
+            batch_size=batch_size,
+            k_values=k_values,
+            group_by=group_by,
+            selection_metric=selection_metric,
+            checkpoint_pattern=checkpoint_pattern,
+            progress_bar=progress_bar,
+        )
+        checkpoint_path = Path(selection_report["best_checkpoint"]).resolve(strict=False)
+        output_path = Path(selection_report["output_dir"])
+    else:
+        checkpoint_path = Path(checkpoint).resolve(strict=False) if checkpoint else find_latest_checkpoint(config["output_dir"])
+        output_path = Path(output_dir) if output_dir else checkpoint_path.parent / "pairwise_eval"
     output_path.mkdir(parents=True, exist_ok=True)
     relation = relation_name or infer_relation_name(dataset_dir)
 
@@ -181,6 +346,8 @@ def run_pair_scoring(
         "config": str(config_path),
         "output_dir": str(output_path),
         "relation_name": relation,
+        "checkpoint_selection": "best_valid" if select_best_checkpoint else "explicit_or_latest",
+        "selection_metric": normalize_selection_metric(selection_metric) if select_best_checkpoint else None,
         "splits": {},
     }
     for split in splits:
@@ -218,12 +385,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--checkpoint-dir", type=Path)
+    parser.add_argument("--checkpoint-pattern", default="model_epoch_*.pth")
+    parser.add_argument("--select-best-checkpoint", action="store_true")
+    parser.add_argument("--selection-metric", default="auprc")
     parser.add_argument("--split-dir", required=True, type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--relation-name")
     parser.add_argument("--splits", nargs="+", default=["valid", "test"], choices=["train", "valid", "test"])
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--k", type=int, nargs="*", default=[10, 50, 100])
+    parser.add_argument("--k", type=int, nargs="*", default=[1, 5, 10])
     parser.add_argument("--group-by", default="endpoint_id")
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
@@ -237,6 +408,10 @@ def main() -> None:
     result = run_pair_scoring(
         config_path=args.config,
         checkpoint=args.checkpoint,
+        checkpoint_dir=args.checkpoint_dir,
+        select_best_checkpoint=args.select_best_checkpoint,
+        selection_metric=args.selection_metric,
+        checkpoint_pattern=args.checkpoint_pattern,
         split_dir=args.split_dir,
         output_dir=args.output_dir,
         relation_name=args.relation_name,

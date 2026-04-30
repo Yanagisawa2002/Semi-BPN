@@ -8,8 +8,12 @@ import pytest
 
 from mechrep.data.build_pairs import PairRecord
 from mechrep.evaluation.score_original_biopathnet_pairs import (
+    checkpoint_epoch,
+    find_checkpoints,
     find_latest_checkpoint,
     infer_relation_name,
+    normalize_selection_metric,
+    selection_metric_mode,
     validate_records_mappable,
 )
 
@@ -34,6 +38,28 @@ def test_find_latest_checkpoint_uses_mtime():
         assert find_latest_checkpoint(tmp_dir) == new
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_find_checkpoints_sorts_by_epoch_before_mtime():
+    tmp_dir = _workspace_tmp_dir()
+    try:
+        epoch_10 = tmp_dir / "run" / "model_epoch_10.pth"
+        epoch_2 = tmp_dir / "run" / "model_epoch_2.pth"
+        epoch_10.parent.mkdir()
+        epoch_10.write_text("epoch 10", encoding="utf-8")
+        time.sleep(0.01)
+        epoch_2.write_text("epoch 2", encoding="utf-8")
+
+        assert checkpoint_epoch(epoch_10) == 10
+        assert find_checkpoints(tmp_dir) == [epoch_2, epoch_10]
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_selection_metric_helpers_normalize_split_prefix_and_mode():
+    assert normalize_selection_metric("valid_auprc") == "auprc"
+    assert selection_metric_mode("valid_auprc") == "max"
+    assert selection_metric_mode("valid_loss") == "min"
 
 
 def test_infer_relation_name_from_train2():

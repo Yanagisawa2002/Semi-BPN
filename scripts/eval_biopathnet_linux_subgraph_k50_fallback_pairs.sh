@@ -15,29 +15,42 @@ python -m mechrep.training.prepare_original_config \
   --output "$CONFIG_RUNTIME" \
   --root "$PWD"
 
-if [ -z "${CHECKPOINT:-}" ]; then
-  CHECKPOINT="$(python - <<'PY'
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
+MODEL_SELECTION_METRIC="${MODEL_SELECTION_METRIC:-auprc}"
+EVAL_K_VALUES=(${EVAL_K_VALUES:-1 5 10})
+
+ARGS=(
+  --config "$CONFIG_RUNTIME"
+  --split-dir "$PWD/data/cloud_run/splits"
+  --relation-name affects_endpoint
+  --splits valid test
+  --batch-size "$EVAL_BATCH_SIZE"
+  --k "${EVAL_K_VALUES[@]}"
+  --group-by endpoint_id
+)
+
+if [ -n "${OUTPUT_DIR:-}" ]; then
+  ARGS+=(--output-dir "$OUTPUT_DIR")
+fi
+
+if [ -n "${CHECKPOINT:-}" ]; then
+  ARGS+=(--checkpoint "$CHECKPOINT")
+else
+  CHECKPOINT_DIR="${CHECKPOINT_DIR:-$(python - <<'PY'
 from pathlib import Path
 
 root = Path("results/biopathnet_linux_subgraph_k50_fallback_train")
 candidates = sorted(root.rglob("model_epoch_*.pth"), key=lambda path: (path.stat().st_mtime, str(path)))
 if not candidates:
     raise SystemExit("No model_epoch_*.pth checkpoint found. Run training first.")
-print(candidates[-1])
+print(candidates[-1].parent)
 PY
-)"
+)}"
+  ARGS+=(
+    --select-best-checkpoint
+    --checkpoint-dir "$CHECKPOINT_DIR"
+    --selection-metric "$MODEL_SELECTION_METRIC"
+  )
 fi
 
-OUTPUT_DIR="${OUTPUT_DIR:-$(dirname "$CHECKPOINT")/pairwise_eval}"
-EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
-
-python -m mechrep.evaluation.score_original_biopathnet_pairs \
-  --config "$CONFIG_RUNTIME" \
-  --checkpoint "$CHECKPOINT" \
-  --split-dir "$PWD/data/cloud_run/splits" \
-  --output-dir "$OUTPUT_DIR" \
-  --relation-name affects_endpoint \
-  --splits valid test \
-  --batch-size "$EVAL_BATCH_SIZE" \
-  --k 1 5 10 50 100 \
-  --group-by endpoint_id
+python -m mechrep.evaluation.score_original_biopathnet_pairs "${ARGS[@]}"

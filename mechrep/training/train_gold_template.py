@@ -204,6 +204,7 @@ def train_one_model(
     stopper = EarlyStopper(early_stopping_metric, patience, min_delta=min_delta)
     monitor_key = normalize_monitor_metric(early_stopping_metric or "")
     best_state = None
+    best_epoch = None
 
     epoch_iter = iter_progress(range(epochs), enabled=progress_bar, desc="gold-template train", unit="epoch")
     for epoch in epoch_iter:
@@ -282,6 +283,7 @@ def train_one_model(
                     "encoder": copy.deepcopy(encoder.state_dict()),
                     "template_head": copy.deepcopy(template_head.state_dict()),
                 }
+                best_epoch = epoch + 1
             if should_stop:
                 epoch_record["early_stopped"] = True
                 history.append(epoch_record)
@@ -291,7 +293,17 @@ def train_one_model(
     if best_state is not None:
         encoder.load_state_dict(best_state["encoder"])
         template_head.load_state_dict(best_state["template_head"])
+    if best_epoch is not None:
+        for record in history:
+            record["selected_for_checkpoint"] = record["epoch"] == best_epoch
     return history
+
+
+def selected_training_record(history: Sequence[dict]) -> dict | None:
+    for record in history:
+        if record.get("selected_for_checkpoint"):
+            return record
+    return history[-1] if history else None
 
 
 def predict_examples(
@@ -418,6 +430,7 @@ def run_gold_template_training(config: dict, *, create_toy_data_if_missing: bool
         min_delta=float(training_config.get("min_delta", 0.0)),
         progress_bar=bool(training_config.get("progress_bar", True)),
     )
+    selected_record = selected_training_record(history)
 
     prediction_rows = {}
     metrics = {}
@@ -439,10 +452,11 @@ def run_gold_template_training(config: dict, *, create_toy_data_if_missing: bool
         )
         metrics[split]["num_examples"] = len(examples)
         metrics[split]["num_templates"] = template_vocab.size
-        if split == "train" and history:
-            metrics[split]["final_loss_pred"] = history[-1]["loss_pred"]
-            metrics[split]["final_loss_gold"] = history[-1]["loss_gold"]
-            metrics[split]["final_loss_total"] = history[-1]["loss_total"]
+        if split == "train" and selected_record:
+            metrics[split]["final_loss_pred"] = selected_record["loss_pred"]
+            metrics[split]["final_loss_gold"] = selected_record["loss_gold"]
+            metrics[split]["final_loss_total"] = selected_record["loss_total"]
+            metrics[split]["selected_epoch"] = selected_record["epoch"]
         write_predictions(output_dir / f"predictions_{split}.tsv", prediction_rows[split])
         write_metrics_json(output_dir / f"metrics_{split}.json", metrics[split])
 
