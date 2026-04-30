@@ -1,0 +1,58 @@
+dataset:
+  class: biomedical
+  path: data/cloud_run/biopathnet_full_indication_debug
+  files: ["train1.txt", "train2.txt", "valid.txt", "test.txt"]
+  include_factgraph: true
+
+task:
+  class: KnowledgeGraphCompletionBiomed
+  model:
+    class: NBFNet
+    input_dim: 16
+    hidden_dims: [16, 16]
+    message_func: distmult
+    aggregate_func: pna
+    short_cut: true
+    layer_norm: true
+    dependent: true
+    symmetric: false
+  criterion: bce
+  num_negative: 4
+  strict_negative: true
+  heterogeneous_negative: true
+  heterogeneous_evaluation: true
+  full_batch_eval: false
+  adversarial_temperature: 0.5
+  sample_weight: false
+  remove_pos: true
+  train2_in_factgraph: false
+
+optimizer:
+  class: Adam
+  lr: 0.005
+
+engine:
+  gpus: [0]
+  batch_size: 1
+
+train:
+  num_epoch: 9
+
+metric: mrr
+output_dir: results/biopathnet_linux_full_indication_pairwise_d16_b4_e9
+
+pairwise_training:
+  split_dir: data/cloud_run/splits
+  relation_name: indication
+  train_batch_size: 4
+  eval_batch_size: 16
+  validation_interval: 3
+  selection_metric: auprc
+  group_by: endpoint_id
+  k_values: [1, 5, 10]
+  progress_bar: true
+  progress_log_interval: 100
+  early_stop_patience: null
+  early_stop_min_delta: 0.0
+  shuffle: true
+  final_splits: ["train", "valid", "test"]

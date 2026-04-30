@@ -47,6 +47,12 @@ def materialize_config(config_path: Path, output_path: Path, root: Path) -> dict
                 if pairwise_eval.get(key):
                     pairwise_eval[key] = _absolute_path(str(pairwise_eval[key]), root)
 
+    pairwise_training = config.get("pairwise_training")
+    if isinstance(pairwise_training, dict):
+        for key in ("split_dir", "output_dir"):
+            if pairwise_training.get(key):
+                pairwise_training[key] = _absolute_path(str(pairwise_training[key]), root)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
