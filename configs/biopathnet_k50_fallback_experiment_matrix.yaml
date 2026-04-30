@@ -1,0 +1,86 @@
+description: >
+  Staged BioPathNet K50+fallback baseline experiments. Each variant keeps
+  validation_interval=10 and selects checkpoints by valid pairwise AUPRC.
+
+defaults:
+  train_epochs: 50
+  validation_interval: 10
+  early_stop_patience: 2
+  selection_metric: auprc
+  eval_k_values: [1, 5, 10]
+  graph: k50_fallback
+
+stage_order:
+  - baseline_d32_l2_neg4_b1
+  - depth_d32_l4_neg4_b1
+  - neg_d32_l4_neg16_b1
+  - throughput_d32_l4_neg16_b4
+  - capacity_d64_l4_neg16_b4
+
+promotion_rules:
+  stop_if_epoch20_valid_auprc_below: 0.54
+  promote_if_best_valid_auprc_at_least: 0.58
+  prefer_metric: valid_auprc
+  notes:
+    - AUROC/AUPRC are primary under sampled pairwise negatives.
+    - Recall@5 and Hits@1 are secondary because candidate groups are small.
+    - Large K values should not be used as headline repurposing metrics.
+
+variants:
+  baseline_d32_l2_neg4_b1:
+    purpose: Reproduce the current formal baseline setting.
+    hidden_dim: 32
+    hidden_layers: 2
+    num_negative: 4
+    train_batch_size: 1
+    learning_rate: 0.005
+    run_name: baseline_d32_l2_neg4_b1
+    expected_use: Already covered if the current d32 run finishes successfully.
+
+  depth_d32_l4_neg4_b1:
+    purpose: Isolate whether deeper path reasoning helps mechanism-length paths.
+    hidden_dim: 32
+    hidden_layers: 4
+    num_negative: 4
+    train_batch_size: 1
+    learning_rate: 0.005
+    run_name: depth_d32_l4_neg4_b1
+    expected_use: Run first if the 2-layer baseline is near random.
+
+  neg_d32_l4_neg16_b1:
+    purpose: Add harder pair discrimination pressure while holding batch size fixed.
+    hidden_dim: 32
+    hidden_layers: 4
+    num_negative: 16
+    train_batch_size: 1
+    learning_rate: 0.005
+    run_name: neg_d32_l4_neg16_b1
+    expected_use: Run if depth improves or if BCE remains noisy.
+
+  throughput_d32_l4_neg16_b4:
+    purpose: Practical stronger baseline with deeper reasoning, more negatives, and better GPU use.
+    hidden_dim: 32
+    hidden_layers: 4
+    num_negative: 16
+    train_batch_size: 4
+    learning_rate: 0.005
+    run_name: throughput_d32_l4_neg16_b4
+    expected_use: Main candidate if memory remains low and valid AUPRC improves.
+
+  capacity_d64_l4_neg16_b4:
+    purpose: Capacity check after the d32 deeper/negative setup shows signal.
+    hidden_dim: 64
+    hidden_layers: 4
+    num_negative: 16
+    train_batch_size: 4
+    learning_rate: 0.005
+    run_name: capacity_d64_l4_neg16_b4
+    expected_use: Run only after d32_l4_neg16_b4 beats the 2-layer baseline.
+
+commands:
+  train_and_eval_one_variant: >
+    VARIANT=throughput_d32_l4_neg16_b4 ACTION=both
+    bash scripts/run_biopathnet_k50_fallback_variant.sh
+  eval_only_one_variant: >
+    VARIANT=throughput_d32_l4_neg16_b4 ACTION=eval
+    bash scripts/run_biopathnet_k50_fallback_variant.sh
