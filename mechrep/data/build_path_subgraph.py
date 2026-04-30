@@ -2,8 +2,10 @@
 
 The output is a standard BioPathNet data directory. ``train1.txt`` contains the
 union of edges from the top-K evidence paths for train pairs, while
-``train2.txt``, ``valid.txt``, ``test.txt`` and entity metadata are copied from
-the full BioPathNet directory.
+``train2.txt``, ``valid.txt`` and ``test.txt`` are copied from the full
+BioPathNet directory. Entity metadata is filtered to the entities that appear in
+the output graph files because the original BioPathNet dataset asserts exact
+metadata coverage.
 """
 
 from __future__ import annotations
@@ -39,9 +41,9 @@ BIOPATHNET_COPY_FILES = (
     "train2.txt",
     "valid.txt",
     "test.txt",
-    "entity_names.txt",
-    "entity_types.txt",
 )
+
+BIOPATHNET_METADATA_FILES = ("entity_names.txt", "entity_types.txt")
 
 
 @dataclass(frozen=True)
@@ -171,6 +173,105 @@ def write_triples(path: str | Path, triples: Sequence[tuple[str, str, str]]) -> 
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         writer.writerows(triples)
+
+
+def read_two_column_tsv(path: str | Path) -> dict[str, str]:
+    path = Path(path)
+    values: dict[str, str] = {}
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        for row_number, row in enumerate(reader, start=1):
+            if len(row) != 2:
+                raise ValueError(f"{path}:{row_number} must have exactly two columns")
+            values[row[0]] = row[1]
+    if not values:
+        raise ValueError(f"{path} contains no rows")
+    return values
+
+
+def load_type_token_map(conversion_report_path: str | Path | None) -> dict[str, str]:
+    if not conversion_report_path:
+        return {}
+    with Path(conversion_report_path).open("r", encoding="utf-8") as handle:
+        report = json.load(handle)
+    type_vocab = report.get("entity_report", {}).get("type_vocab")
+    if not isinstance(type_vocab, dict):
+        raise ValueError(f"{conversion_report_path} is missing entity_report.type_vocab")
+    mapping = {str(type_name): str(type_index) for type_name, type_index in type_vocab.items()}
+    if "Endpoint" not in mapping and "Disease" in mapping:
+        mapping["Endpoint"] = mapping["Disease"]
+    return mapping
+
+
+def path_node_type_overrides(
+    paths: Sequence[EvidencePath],
+    *,
+    conversion_report_path: str | Path | None,
+) -> dict[str, str]:
+    type_token_map = load_type_token_map(conversion_report_path)
+    overrides: dict[str, str] = {}
+    if not type_token_map:
+        return overrides
+    for path in paths:
+        for node_id, node_type in zip(path.node_ids, path.node_types):
+            type_token = type_token_map.get(node_type)
+            if type_token is None:
+                continue
+            previous = overrides.get(node_id)
+            if previous is not None and previous != type_token:
+                raise ValueError(f"Conflicting type overrides for node {node_id}: {previous} vs {type_token}")
+            overrides[node_id] = type_token
+    return overrides
+
+
+def collect_nodes_in_biopathnet_order(triples_by_file: Sequence[Sequence[tuple[str, str, str]]]) -> list[str]:
+    nodes = []
+    seen = set()
+    for triples in triples_by_file:
+        for head, _, tail in triples:
+            for node in (head, tail):
+                if node in seen:
+                    continue
+                seen.add(node)
+                nodes.append(node)
+    return nodes
+
+
+def write_filtered_metadata(
+    *,
+    source_dir: Path,
+    output_dir: Path,
+    nodes_in_order: Sequence[str],
+    type_overrides: dict[str, str] | None = None,
+) -> dict:
+    type_overrides = type_overrides or {}
+    entity_names = read_two_column_tsv(source_dir / "entity_names.txt")
+    entity_types = read_two_column_tsv(source_dir / "entity_types.txt")
+    missing_names = [node for node in nodes_in_order if node not in entity_names]
+    missing_types = [node for node in nodes_in_order if node not in entity_types and node not in type_overrides]
+    if missing_types:
+        raise ValueError(f"Missing entity types for output nodes: {missing_types[:20]}")
+
+    with (output_dir / "entity_names.txt").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        for node in nodes_in_order:
+            writer.writerow([node, entity_names.get(node, node)])
+    with (output_dir / "entity_types.txt").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        for node in nodes_in_order:
+            type_token = entity_types[node] if node in entity_types else type_overrides[node]
+            writer.writerow([node, type_token])
+
+    return {
+        "metadata_entities_written": len(nodes_in_order),
+        "source_entity_names": len(entity_names),
+        "source_entity_types": len(entity_types),
+        "missing_entity_names_filled_with_entity_id": len(missing_names),
+        "missing_entity_types": 0,
+        "missing_entity_types_filled_from_path_node_types": sum(
+            1 for node in nodes_in_order if node not in entity_types and node in type_overrides
+        ),
+    }
 
 
 def _parse_bool(value: str, *, source: str) -> bool:
@@ -331,8 +432,6 @@ def build_fallback_structural_edges(
                         continue
                     pair_edges.add(edge.as_triple())
                     bridge_edge_additions += 1
-            if found_two_hop:
-                stats["fallback_pairs_with_two_hop_bridge"] += 1
                 for edge in endpoint_edges_by_head[bridge_node]:
                     if bridge_edge_additions >= max_bridge_edges_per_pair:
                         break
@@ -341,6 +440,8 @@ def build_fallback_structural_edges(
                         continue
                     pair_edges.add(edge.as_triple())
                     bridge_edge_additions += 1
+            if found_two_hop:
+                stats["fallback_pairs_with_two_hop_bridge"] += 1
 
         if include_three_hop_bridges:
             endpoint_heads = set(endpoint_edges_by_head)
@@ -489,7 +590,7 @@ def build_path_subgraph(config: dict) -> dict:
     if allowed_splits != {"train"}:
         raise ValueError("Only train evidence paths are allowed for training subgraph construction by default")
 
-    for file_name in ("train1.txt", *BIOPATHNET_COPY_FILES):
+    for file_name in ("train1.txt", *BIOPATHNET_COPY_FILES, *BIOPATHNET_METADATA_FILES):
         if not (source_dir / file_name).exists():
             raise FileNotFoundError(f"Missing BioPathNet source file: {source_dir / file_name}")
 
@@ -521,10 +622,22 @@ def build_path_subgraph(config: dict) -> dict:
     for file_name in BIOPATHNET_COPY_FILES:
         shutil.copy2(source_dir / file_name, output_dir / file_name)
 
+    copied_split_triples = [read_triples(source_dir / file_name) for file_name in BIOPATHNET_COPY_FILES]
+    nodes_in_dataset_order = collect_nodes_in_biopathnet_order([sorted_edges, *copied_split_triples])
+    metadata_report = write_filtered_metadata(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        nodes_in_order=nodes_in_dataset_order,
+        type_overrides=path_node_type_overrides(
+            [*selected_paths, *train_gold_paths],
+            conversion_report_path=config.get("conversion_report"),
+        ),
+    )
+
     full_edges = read_triples(source_dir / "train1.txt")
-    train_target_edges = read_triples(source_dir / "train2.txt")
+    train_target_edges = copied_split_triples[0]
     full_edge_set = set(full_edges)
-    selected_nodes = {node for head, _, tail in edge_set for node in (head, tail)}
+    selected_nodes = set(nodes_in_dataset_order)
     full_nodes = {node for head, _, tail in full_edge_set for node in (head, tail)}
     relation_counts = Counter(relation for _, relation, _ in edge_set)
     path_lengths = [len(path.relation_types) for path in selected_paths]
@@ -545,6 +658,7 @@ def build_path_subgraph(config: dict) -> dict:
         "include_train_gold_paths": include_train_gold_paths,
         "train_gold_paths_added": len(train_gold_paths),
         "fallback_structural_support": fallback_report,
+        "metadata": metadata_report,
         "selected_edges": len(edge_set),
         "selected_nodes": len(selected_nodes),
         "full_train1_edges": len(full_edge_set),

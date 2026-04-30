@@ -44,8 +44,25 @@ def test_path_subgraph_fallback_adds_structure_without_target_or_pseudo_labels()
         _write_tsv(source_dir / "train2.txt", [["D0", "affects_endpoint", "E0"], ["D1", "affects_endpoint", "E1"]])
         _write_tsv(source_dir / "valid.txt", [["D2", "affects_endpoint", "E2"]])
         _write_tsv(source_dir / "test.txt", [["D3", "affects_endpoint", "E3"]])
-        _write_tsv(source_dir / "entity_names.txt", [["D0", "D0"], ["D1", "D1"], ["G0", "G0"], ["G1", "G1"], ["E0", "E0"], ["E1", "E1"]])
-        _write_tsv(source_dir / "entity_types.txt", [["D0", 0], ["D1", 0], ["G0", 1], ["G1", 1], ["E0", 2], ["E1", 2]])
+        _write_tsv(
+            source_dir / "entity_names.txt",
+            [
+                ["D0", "D0"],
+                ["D1", "D1"],
+                ["D2", "D2"],
+                ["D3", "D3"],
+                ["G0", "G0"],
+                ["G1", "G1"],
+                ["E0", "E0"],
+                ["E1", "E1"],
+                ["E2", "E2"],
+                ["E3", "E3"],
+            ],
+        )
+        _write_tsv(
+            source_dir / "entity_types.txt",
+            [["D0", 0], ["D1", 0], ["D2", 0], ["D3", 0], ["G0", 1], ["G1", 1], ["E0", 2], ["E1", 2], ["E2", 2], ["E3", 2]],
+        )
         (tmp_dir / "conversion_report.json").write_text(
             '{"entity_report":{"type_vocab":{"Drug":0,"Gene":1,"Disease":2}}}',
             encoding="utf-8",

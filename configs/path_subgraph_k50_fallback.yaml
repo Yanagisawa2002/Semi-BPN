@@ -1,6 +1,7 @@
 source_dir: data/cloud_run/biopathnet_full
 evidence_paths_train: data/cloud_run/gold_template/evidence_paths_train.tsv
 gold_paths_file: data/cloud_run/all_data/gold_paths.tsv
+conversion_report: data/cloud_run/all_data/conversion_report.json
 output_dir: data/cloud_run/biopathnet_path_subgraph_k50_fallback
 top_k_per_pair: 50
 allowed_evidence_splits: ["train"]
