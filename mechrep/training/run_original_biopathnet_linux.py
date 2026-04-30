@@ -93,7 +93,7 @@ def _patch_torchdrug_extension_compatibility() -> None:
         return
 
     def module(self):
-        cached = getattr(self, "_mechrep_loaded_module", None)
+        cached = self.__dict__.get("_mechrep_loaded_module")
         if cached is not None:
             return cached
         loaded = cpp_extension.load(
@@ -107,7 +107,7 @@ def _patch_torchdrug_extension_compatibility() -> None:
             verbose=self.verbose,
             **self.kwargs,
         )
-        self._mechrep_loaded_module = loaded
+        self.__dict__["_mechrep_loaded_module"] = loaded
         return loaded
 
     torchdrug_torch.LazyExtensionLoader.module = property(module)
