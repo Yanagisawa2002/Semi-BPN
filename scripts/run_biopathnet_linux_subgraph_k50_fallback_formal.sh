@@ -24,6 +24,11 @@ if [ -z "${RUN_NAME:-}" ]; then
 fi
 OUTPUT_DIR="${OUTPUT_DIR:-$PWD/results/biopathnet_linux_subgraph_k50_fallback_formal_${RUN_NAME}}"
 
+if [ "$TRAIN_BATCH_SIZE" -lt 2 ]; then
+  echo "WARNING: TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE degenerates BioPathNet negative sampling to one direction only." >&2
+  echo "Use TRAIN_BATCH_SIZE=4 or larger for pairwise baseline training." >&2
+fi
+
 if [ ! -f "$PWD/data/cloud_run/biopathnet_path_subgraph_k50_fallback/train1.txt" ]; then
   bash scripts/build_path_subgraph_k50_fallback.sh
 fi

@@ -10,7 +10,9 @@ def test_k50_fallback_experiment_matrix_has_runnable_variants():
     variants = matrix["variants"]
     assert matrix["stage_order"]
     assert set(matrix["stage_order"]) <= set(variants)
+    assert "batch_d32_l2_neg4_b4" in variants
     assert "throughput_d32_l4_neg16_b4" in variants
+    assert variants["batch_d32_l2_neg4_b4"]["train_batch_size"] == 4
 
     required_positive_ints = ("hidden_dim", "hidden_layers", "num_negative", "train_batch_size")
     seen_run_names = set()

@@ -12,6 +12,7 @@ defaults:
 
 stage_order:
   - baseline_d32_l2_neg4_b1
+  - batch_d32_l2_neg4_b4
   - depth_d32_l4_neg4_b1
   - neg_d32_l4_neg16_b1
   - throughput_d32_l4_neg16_b4
@@ -36,6 +37,16 @@ variants:
     learning_rate: 0.005
     run_name: baseline_d32_l2_neg4_b1
     expected_use: Already covered if the current d32 run finishes successfully.
+
+  batch_d32_l2_neg4_b4:
+    purpose: Isolate BioPathNet's batch-splitting negative sampling issue; batch size 1 only trains head corruption.
+    hidden_dim: 32
+    hidden_layers: 2
+    num_negative: 4
+    train_batch_size: 4
+    learning_rate: 0.005
+    run_name: batch_d32_l2_neg4_b4
+    expected_use: Run immediately after b1 failures to test whether even batch training learns tail ranking.
 
   depth_d32_l4_neg4_b1:
     purpose: Isolate whether deeper path reasoning helps mechanism-length paths.

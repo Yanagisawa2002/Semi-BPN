@@ -10,6 +10,7 @@ if [ -z "$VARIANT" ]; then
   cat <<'EOF'
 Set VARIANT to one of:
   baseline_d32_l2_neg4_b1
+  batch_d32_l2_neg4_b4
   depth_d32_l4_neg4_b1
   neg_d32_l4_neg16_b1
   throughput_d32_l4_neg16_b4
@@ -28,6 +29,13 @@ case "$VARIANT" in
     export NUM_NEGATIVE="${NUM_NEGATIVE:-4}"
     export TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-1}"
     export RUN_NAME="${RUN_NAME:-baseline_d32_l2_neg4_b1}"
+    ;;
+  batch_d32_l2_neg4_b4)
+    export HIDDEN_DIM="${HIDDEN_DIM:-32}"
+    export HIDDEN_LAYERS="${HIDDEN_LAYERS:-2}"
+    export NUM_NEGATIVE="${NUM_NEGATIVE:-4}"
+    export TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-4}"
+    export RUN_NAME="${RUN_NAME:-batch_d32_l2_neg4_b4}"
     ;;
   depth_d32_l4_neg4_b1)
     export HIDDEN_DIM="${HIDDEN_DIM:-32}"
