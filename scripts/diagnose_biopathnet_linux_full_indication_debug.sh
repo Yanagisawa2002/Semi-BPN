@@ -9,19 +9,19 @@ HIDDEN_DIM="${HIDDEN_DIM:-16}"
 HIDDEN_LAYERS="${HIDDEN_LAYERS:-2}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-4}"
 NUM_NEGATIVE="${NUM_NEGATIVE:-4}"
-TRAIN_EPOCHS="${TRAIN_EPOCHS:-5}"
-EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-1}"
+TRAIN_EPOCHS="${TRAIN_EPOCHS:-3}"
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 MAX_RECORDS_PER_SPLIT="${MAX_RECORDS_PER_SPLIT:-0}"
 MAX_TRAINING_POSITIVE_TRIPLES="${MAX_TRAINING_POSITIVE_TRIPLES:-4096}"
 TRAINING_NEGATIVE_BATCH_SIZE="${TRAINING_NEGATIVE_BATCH_SIZE:-16}"
 SAMPLING_SEED="${SAMPLING_SEED:-42}"
-RUN_NAME="${RUN_NAME:-d${HIDDEN_DIM}_l${HIDDEN_LAYERS}_neg${NUM_NEGATIVE}_b${TRAIN_BATCH_SIZE}_e${TRAIN_EPOCHS}}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-$PWD/results/biopathnet_linux_full_pairwise_diagnostic_${RUN_NAME}}"
-CONFIG_RUNTIME="${CONFIG_RUNTIME:-$PWD/results/runtime_configs/biopathnet_linux_full_pairwise_diagnostic_${RUN_NAME}.yaml}"
+RUN_NAME="${RUN_NAME:-indication_d${HIDDEN_DIM}_l${HIDDEN_LAYERS}_neg${NUM_NEGATIVE}_b${TRAIN_BATCH_SIZE}_e${TRAIN_EPOCHS}}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$PWD/results/biopathnet_linux_full_indication_debug_${RUN_NAME}}"
+CONFIG_RUNTIME="${CONFIG_RUNTIME:-$PWD/results/runtime_configs/biopathnet_linux_full_indication_debug_${RUN_NAME}.yaml}"
 
 if [ ! -f "$CONFIG_RUNTIME" ]; then
   python -m mechrep.training.prepare_original_config \
-    --config "$PWD/configs/biopathnet_linux_full_pairwise_diagnostic.yaml" \
+    --config "$PWD/configs/biopathnet_linux_full_indication_debug.yaml" \
     --output "$CONFIG_RUNTIME" \
     --root "$PWD"
 fi
@@ -53,6 +53,7 @@ model["input_dim"] = hidden_dim
 model["hidden_dims"] = [hidden_dim] * hidden_layers
 runtime = config.setdefault("runtime", {})
 pairwise_eval = runtime.setdefault("pairwise_eval", {})
+pairwise_eval["relation_name"] = "indication"
 pairwise_eval["output_dir"] = str(output_root / "pairwise_validation")
 
 with config_path.open("w", encoding="utf-8") as handle:
@@ -69,7 +70,7 @@ import sys
 root = Path(sys.argv[1])
 candidates = sorted(root.rglob("model_epoch_*.pth"), key=lambda path: (path.stat().st_mtime, str(path)))
 if not candidates:
-    raise SystemExit(f"No model_epoch_*.pth checkpoint found under {root}. Run full pairwise diagnostic training first.")
+    raise SystemExit(f"No model_epoch_*.pth checkpoint found under {root}. Run indication debug training first.")
 print(candidates[-1].parent)
 PY
 )}"
@@ -95,7 +96,7 @@ python -m mechrep.evaluation.diagnose_original_biopathnet_pairs \
   "${CHECKPOINT_ARGS[@]}" \
   --split-dir "$PWD/data/cloud_run/splits" \
   --output-dir "$OUTPUT_DIR" \
-  --relation-name affects_endpoint \
+  --relation-name indication \
   --splits train valid test \
   --batch-size "$EVAL_BATCH_SIZE" \
   --k 1 5 10 \

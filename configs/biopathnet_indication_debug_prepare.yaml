@@ -1,0 +1,10 @@
+source_dir: data/cloud_run/biopathnet_full
+output_dir: data/cloud_run/biopathnet_full_indication_debug
+source_relation: affects_endpoint
+target_relation: indication
+files: ["train1.txt", "train2.txt", "valid.txt", "test.txt"]
+target_files: ["train2.txt", "valid.txt", "test.txt"]
+copy_files: ["entity_types.txt", "entity_names.txt", "prepare_report.json"]
+require_source_relation: true
+forbid_source_relation_in_copied_files: true
+forbid_target_relation_in_copied_files: true

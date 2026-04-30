@@ -1,6 +1,6 @@
 dataset:
   class: biomedical
-  path: data/cloud_run/biopathnet_full
+  path: data/cloud_run/biopathnet_full_indication_debug
   files: ["train1.txt", "train2.txt", "valid.txt", "test.txt"]
   include_factgraph: true
 
@@ -36,10 +36,10 @@ engine:
   batch_size: 4
 
 train:
-  num_epoch: 5
+  num_epoch: 3
 
 metric: mrr
-output_dir: results/biopathnet_linux_full_pairwise_diagnostic_d16
+output_dir: results/biopathnet_linux_full_indication_debug_d16_b4_e3
 
 runtime:
   skip_eval: true
@@ -51,9 +51,9 @@ runtime:
   pairwise_eval:
     enabled: true
     split_dir: data/cloud_run/splits
-    output_dir: results/biopathnet_linux_full_pairwise_diagnostic_d16/pairwise_validation
-    relation_name: affects_endpoint
-    batch_size: 1
+    output_dir: results/biopathnet_linux_full_indication_debug_d16_b4_e3/pairwise_validation
+    relation_name: indication
+    batch_size: 16
     k_values: [1, 5, 10]
     group_by: endpoint_id
     selection_metric: auprc

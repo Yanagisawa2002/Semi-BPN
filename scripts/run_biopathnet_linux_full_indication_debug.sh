@@ -5,26 +5,25 @@ cd "$(dirname "$0")/.."
 export PYTHONPATH="$PWD:$PWD/biopathnet/original:${PYTHONPATH:-}"
 export TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$PWD/.torch_extensions_linux}"
 
-TRAIN_EPOCHS="${TRAIN_EPOCHS:-5}"
+TRAIN_EPOCHS="${TRAIN_EPOCHS:-3}"
 HIDDEN_DIM="${HIDDEN_DIM:-16}"
 HIDDEN_LAYERS="${HIDDEN_LAYERS:-2}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-4}"
 NUM_NEGATIVE="${NUM_NEGATIVE:-4}"
 LR="${LR:-0.005}"
 VALIDATION_INTERVAL="${VALIDATION_INTERVAL:-3}"
-EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-1}"
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 MODEL_SELECTION_METRIC="${MODEL_SELECTION_METRIC:-auprc}"
-RUN_NAME="${RUN_NAME:-d${HIDDEN_DIM}_l${HIDDEN_LAYERS}_neg${NUM_NEGATIVE}_b${TRAIN_BATCH_SIZE}_e${TRAIN_EPOCHS}}"
-OUTPUT_DIR="${OUTPUT_DIR:-$PWD/results/biopathnet_linux_full_pairwise_diagnostic_${RUN_NAME}}"
+RUN_NAME="${RUN_NAME:-indication_d${HIDDEN_DIM}_l${HIDDEN_LAYERS}_neg${NUM_NEGATIVE}_b${TRAIN_BATCH_SIZE}_e${TRAIN_EPOCHS}}"
+OUTPUT_DIR="${OUTPUT_DIR:-$PWD/results/biopathnet_linux_full_indication_debug_${RUN_NAME}}"
 
-if [ ! -f "$PWD/data/cloud_run/biopathnet_full/train1.txt" ]; then
-  echo "Missing full BioPathNet data under data/cloud_run/biopathnet_full" >&2
-  exit 2
+if [ ! -f "$PWD/data/cloud_run/biopathnet_full_indication_debug/train1.txt" ]; then
+  bash scripts/build_biopathnet_indication_debug.sh
 fi
 
-CONFIG_RUNTIME="$PWD/results/runtime_configs/biopathnet_linux_full_pairwise_diagnostic_${RUN_NAME}.yaml"
+CONFIG_RUNTIME="$PWD/results/runtime_configs/biopathnet_linux_full_indication_debug_${RUN_NAME}.yaml"
 python -m mechrep.training.prepare_original_config \
-  --config "$PWD/configs/biopathnet_linux_full_pairwise_diagnostic.yaml" \
+  --config "$PWD/configs/biopathnet_linux_full_indication_debug.yaml" \
   --output "$CONFIG_RUNTIME" \
   --root "$PWD"
 
@@ -53,6 +52,8 @@ if num_negative <= 0:
     raise ValueError(f"NUM_NEGATIVE must be positive, got {num_negative}")
 if eval_batch_size <= 0:
     raise ValueError(f"EVAL_BATCH_SIZE must be positive, got {eval_batch_size}")
+if validation_interval <= 0:
+    raise ValueError(f"VALIDATION_INTERVAL must be positive, got {validation_interval}")
 
 with config_path.open("r", encoding="utf-8") as handle:
     config = yaml.safe_load(handle)
@@ -76,6 +77,7 @@ pairwise_eval = runtime.setdefault("pairwise_eval", {})
 pairwise_eval["enabled"] = True
 pairwise_eval["batch_size"] = eval_batch_size
 pairwise_eval["selection_metric"] = selection_metric
+pairwise_eval["relation_name"] = "indication"
 pairwise_eval["output_dir"] = str(output_dir / "pairwise_validation")
 
 with config_path.open("w", encoding="utf-8") as handle:
