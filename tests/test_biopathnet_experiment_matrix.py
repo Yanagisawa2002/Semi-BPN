@@ -7,6 +7,7 @@ def test_k50_fallback_experiment_matrix_has_runnable_variants():
     matrix_path = Path("configs/biopathnet_k50_fallback_experiment_matrix.yaml")
     matrix = yaml.safe_load(matrix_path.read_text(encoding="utf-8"))
 
+    assert matrix["defaults"]["validation_interval"] == 3
     variants = matrix["variants"]
     assert matrix["stage_order"]
     assert set(matrix["stage_order"]) <= set(variants)

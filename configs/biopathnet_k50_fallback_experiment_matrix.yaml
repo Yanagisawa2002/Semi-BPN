@@ -1,10 +1,10 @@
 description: >
   Staged BioPathNet K50+fallback baseline experiments. Each variant keeps
-  validation_interval=10 and selects checkpoints by valid pairwise AUPRC.
+  validation_interval=3 and selects checkpoints by valid pairwise AUPRC.
 
 defaults:
   train_epochs: 50
-  validation_interval: 10
+  validation_interval: 3
   early_stop_patience: 2
   selection_metric: auprc
   eval_k_values: [1, 5, 10]
