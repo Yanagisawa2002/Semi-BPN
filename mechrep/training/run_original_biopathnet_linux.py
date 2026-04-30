@@ -252,9 +252,15 @@ def _test_with_runtime_controls(solver, *, skip_eval: bool, eval_num_negative: i
 def _run_original_with_runtime_controls(runtime: dict[str, Any]) -> None:
     import numpy as np
     import torch
-    from torchdrug import core
+    from torchdrug import core, models as _torchdrug_models  # noqa: F401
     from torchdrug.utils import comm
 
+    # Import BioPathNet modules for TorchDrug registry side effects. The
+    # original run.py does this before loading config-defined classes.
+    from biopathnet import dataset as _dataset  # noqa: F401
+    from biopathnet import layer as _layer  # noqa: F401
+    from biopathnet import model as _model  # noqa: F401
+    from biopathnet import task as _task  # noqa: F401
     from biopathnet import util
 
     args, variables = util.parse_args()
