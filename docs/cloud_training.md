@@ -222,6 +222,24 @@ Override the epoch count with:
 TRAIN_EPOCHS=50 bash scripts/run_biopathnet_linux_subgraph_k50_fallback_train.sh
 ```
 
+After training, export endpoint-OOD pairwise scores and compute AUROC / AUPRC /
+Recall@K / Hits@K on the prepared valid and test pair files. The script
+includes `K=1` because the current pair files are balanced 1:1 positives /
+negatives, so large K values can saturate quickly within each endpoint group:
+
+```bash
+bash scripts/eval_biopathnet_linux_subgraph_k50_fallback_pairs.sh
+```
+
+The script uses the latest `model_epoch_*.pth` under the K=50 fallback training
+result directory by default. Override it with:
+
+```bash
+CHECKPOINT=/path/to/model_epoch_20.pth bash scripts/eval_biopathnet_linux_subgraph_k50_fallback_pairs.sh
+```
+
+Outputs are written next to the checkpoint under `pairwise_eval/`.
+
 Compare graph sizes and coverage for the full graph, K=50 evidence-only graph,
 and K=50 plus fallback support:
 
