@@ -1,0 +1,20 @@
+source_dir: data/cloud_run/biopathnet_full
+evidence_paths_train: data/cloud_run/gold_template/evidence_paths_train.tsv
+gold_paths_file: data/cloud_run/all_data/gold_paths.tsv
+output_dir: data/cloud_run/biopathnet_path_subgraph_k50_fallback
+top_k_per_pair: 50
+allowed_evidence_splits: ["train"]
+include_train_gold_paths: true
+
+fallback_structural_support:
+  enabled: true
+  no_evidence_pairs: data/cloud_run/reports/no_evidence_pairs_train.tsv
+  pair_scope: all_no_evidence_train_positive
+  entity_types: data/cloud_run/biopathnet_full/entity_types.txt
+  conversion_report: data/cloud_run/all_data/conversion_report.json
+  include_two_hop_bridges: true
+  include_three_hop_bridges: true
+  include_neighbor_union: true
+  max_drug_edges_per_pair: 50
+  max_endpoint_edges_per_pair: 50
+  max_bridge_edges_per_pair: 100

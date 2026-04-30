@@ -19,6 +19,9 @@ from typing import Iterable, Sequence
 
 import yaml
 
+from mechrep.data.no_evidence_report import Edge, read_train_kg_edges, sort_in_edges, sort_out_edges
+from mechrep.templates.export_evidence_paths import load_entity_types
+
 
 EVIDENCE_COLUMNS = (
     "pair_id",
@@ -60,6 +63,14 @@ class EvidencePath:
     def edges(self) -> Iterable[tuple[str, str, str]]:
         for head, relation, tail in zip(self.node_ids, self.relation_types, self.node_ids[1:]):
             yield head, relation, tail
+
+
+@dataclass(frozen=True)
+class FallbackPair:
+    pair_id: str
+    drug_id: str
+    endpoint_id: str
+    has_gold_template: bool
 
 
 def load_config(path: str | Path) -> dict:
@@ -162,6 +173,246 @@ def write_triples(path: str | Path, triples: Sequence[tuple[str, str, str]]) -> 
         writer.writerows(triples)
 
 
+def _parse_bool(value: str, *, source: str) -> bool:
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    raise ValueError(f"{source} must be a boolean value, got {value!r}")
+
+
+def read_no_evidence_pairs(path: str | Path, *, pair_scope: str) -> list[FallbackPair]:
+    path = Path(path)
+    required = ["pair_id", "drug_id", "endpoint_id", "split", "label", "has_gold_template"]
+    pairs: list[FallbackPair] = []
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            raise ValueError(f"{path} is empty")
+        missing = [column for column in required if column not in reader.fieldnames]
+        if missing:
+            raise ValueError(f"{path} is missing columns: {missing}")
+        for row_number, row in enumerate(reader, start=2):
+            source = f"{path}:{row_number}"
+            if row["split"] != "train":
+                raise ValueError(f"{source} fallback structural support only accepts train pairs")
+            if row["label"] != "1":
+                raise ValueError(f"{source} fallback structural support only accepts positive pairs")
+            has_gold_template = _parse_bool(row["has_gold_template"], source=f"{source} has_gold_template")
+            if pair_scope == "no_gold_only" and has_gold_template:
+                continue
+            if pair_scope == "gold_only" and not has_gold_template:
+                continue
+            if pair_scope not in {"all_no_evidence_train_positive", "no_gold_only", "gold_only"}:
+                raise ValueError(
+                    "fallback_structural_support.pair_scope must be one of "
+                    "all_no_evidence_train_positive, no_gold_only, gold_only"
+                )
+            pairs.append(
+                FallbackPair(
+                    pair_id=row["pair_id"],
+                    drug_id=row["drug_id"],
+                    endpoint_id=row["endpoint_id"],
+                    has_gold_template=has_gold_template,
+                )
+            )
+    return sorted(pairs, key=lambda item: (item.endpoint_id, item.drug_id, item.pair_id))
+
+
+def _add_non_target_edge(edge_set: set[tuple[str, str, str]], edge: Edge) -> bool:
+    if edge.relation == "affects_endpoint":
+        return False
+    edge_set.add(edge.as_triple())
+    return True
+
+
+def _build_fallback_edge_index(
+    kg_path: str | Path,
+    pairs: Sequence[FallbackPair],
+    *,
+    entity_types: dict[str, str],
+    include_three_hop_bridges: bool,
+) -> dict:
+    drugs = {pair.drug_id for pair in pairs}
+    endpoints = {pair.endpoint_id for pair in pairs}
+    drug_out = defaultdict(list)
+    endpoint_in = defaultdict(list)
+
+    for edge in read_train_kg_edges(kg_path):
+        if edge.head in drugs:
+            drug_out[edge.head].append(edge)
+        if edge.tail in endpoints:
+            endpoint_in[edge.tail].append(edge)
+
+    sorted_drug_out = {node: sort_out_edges(edges, entity_types) for node, edges in drug_out.items()}
+    sorted_endpoint_in = {node: sort_in_edges(edges, entity_types) for node, edges in endpoint_in.items()}
+
+    mid_edges_by_head = {}
+    if include_three_hop_bridges:
+        first_hop_nodes = {edge.tail for edges in sorted_drug_out.values() for edge in edges}
+        endpoint_predecessors = {edge.head for edges in sorted_endpoint_in.values() for edge in edges}
+        raw_mid_edges = defaultdict(list)
+        if first_hop_nodes and endpoint_predecessors:
+            for edge in read_train_kg_edges(kg_path):
+                if edge.head in first_hop_nodes and edge.tail in endpoint_predecessors:
+                    raw_mid_edges[edge.head].append(edge)
+        mid_edges_by_head = {
+            node: sort_out_edges(edges, entity_types) for node, edges in raw_mid_edges.items()
+        }
+
+    return {
+        "drug_out": sorted_drug_out,
+        "endpoint_in": sorted_endpoint_in,
+        "mid_edges_by_head": mid_edges_by_head,
+    }
+
+
+def build_fallback_structural_edges(
+    source_train1: str | Path,
+    config: dict,
+) -> tuple[set[tuple[str, str, str]], dict]:
+    if not config.get("enabled", False):
+        return set(), {"enabled": False, "pseudo_labels_created": 0}
+
+    no_evidence_pairs_path = config.get("no_evidence_pairs")
+    if not no_evidence_pairs_path:
+        raise ValueError("fallback_structural_support.enabled=true requires no_evidence_pairs")
+    entity_types_path = config.get("entity_types")
+    conversion_report_path = config.get("conversion_report")
+    if not entity_types_path or not conversion_report_path:
+        raise ValueError("fallback_structural_support requires entity_types and conversion_report")
+
+    pair_scope = config.get("pair_scope", "all_no_evidence_train_positive")
+    pairs = read_no_evidence_pairs(no_evidence_pairs_path, pair_scope=pair_scope)
+    entity_types = load_entity_types(entity_types_path, conversion_report_path)
+    include_two_hop_bridges = bool(config.get("include_two_hop_bridges", True))
+    include_three_hop_bridges = bool(config.get("include_three_hop_bridges", True))
+    include_neighbor_union = bool(config.get("include_neighbor_union", True))
+    max_drug_edges_per_pair = int(config.get("max_drug_edges_per_pair", 50))
+    max_endpoint_edges_per_pair = int(config.get("max_endpoint_edges_per_pair", 50))
+    max_bridge_edges_per_pair = int(config.get("max_bridge_edges_per_pair", 100))
+
+    index = _build_fallback_edge_index(
+        source_train1,
+        pairs,
+        entity_types=entity_types,
+        include_three_hop_bridges=include_three_hop_bridges,
+    )
+    fallback_edges: set[tuple[str, str, str]] = set()
+    stats = Counter()
+    per_pair_edge_counts = {}
+    target_relation_edges_skipped = 0
+
+    for pair in pairs:
+        pair_edges: set[tuple[str, str, str]] = set()
+        drug_edges = index["drug_out"].get(pair.drug_id, [])
+        endpoint_edges = index["endpoint_in"].get(pair.endpoint_id, [])
+        endpoint_edges_by_head = defaultdict(list)
+        drug_edges_by_tail = defaultdict(list)
+        for edge in endpoint_edges:
+            endpoint_edges_by_head[edge.head].append(edge)
+        for edge in drug_edges:
+            drug_edges_by_tail[edge.tail].append(edge)
+
+        if include_two_hop_bridges:
+            bridges = sorted(set(drug_edges_by_tail) & set(endpoint_edges_by_head))
+            bridge_edge_additions = 0
+            found_two_hop = False
+            for bridge_node in bridges:
+                if bridge_edge_additions >= max_bridge_edges_per_pair:
+                    break
+                found_two_hop = True
+                for edge in drug_edges_by_tail[bridge_node]:
+                    if bridge_edge_additions >= max_bridge_edges_per_pair:
+                        break
+                    if edge.relation == "affects_endpoint":
+                        target_relation_edges_skipped += 1
+                        continue
+                    pair_edges.add(edge.as_triple())
+                    bridge_edge_additions += 1
+            if found_two_hop:
+                stats["fallback_pairs_with_two_hop_bridge"] += 1
+                for edge in endpoint_edges_by_head[bridge_node]:
+                    if bridge_edge_additions >= max_bridge_edges_per_pair:
+                        break
+                    if edge.relation == "affects_endpoint":
+                        target_relation_edges_skipped += 1
+                        continue
+                    pair_edges.add(edge.as_triple())
+                    bridge_edge_additions += 1
+
+        if include_three_hop_bridges:
+            endpoint_heads = set(endpoint_edges_by_head)
+            bridge_edge_additions = 0
+            found_three_hop = False
+            for first_edge in drug_edges:
+                if bridge_edge_additions >= max_bridge_edges_per_pair:
+                    break
+                for mid_edge in index["mid_edges_by_head"].get(first_edge.tail, []):
+                    if bridge_edge_additions >= max_bridge_edges_per_pair:
+                        break
+                    if mid_edge.tail not in endpoint_heads:
+                        continue
+                    found_three_hop = True
+                    for edge in (first_edge, mid_edge):
+                        if bridge_edge_additions >= max_bridge_edges_per_pair:
+                            break
+                        if edge.relation == "affects_endpoint":
+                            target_relation_edges_skipped += 1
+                            continue
+                        pair_edges.add(edge.as_triple())
+                        bridge_edge_additions += 1
+                    for endpoint_edge in endpoint_edges_by_head[mid_edge.tail]:
+                        if bridge_edge_additions >= max_bridge_edges_per_pair:
+                            break
+                        if endpoint_edge.relation == "affects_endpoint":
+                            target_relation_edges_skipped += 1
+                            continue
+                        pair_edges.add(endpoint_edge.as_triple())
+                        bridge_edge_additions += 1
+            if found_three_hop:
+                stats["fallback_pairs_with_three_hop_bridge"] += 1
+
+        if include_neighbor_union:
+            for edge in drug_edges[:max_drug_edges_per_pair]:
+                if not _add_non_target_edge(pair_edges, edge):
+                    target_relation_edges_skipped += 1
+            for edge in endpoint_edges[:max_endpoint_edges_per_pair]:
+                if not _add_non_target_edge(pair_edges, edge):
+                    target_relation_edges_skipped += 1
+
+        fallback_edges.update(pair_edges)
+        per_pair_edge_counts[pair.pair_id] = len(pair_edges)
+        if pair_edges:
+            stats["fallback_pairs_with_any_structural_edge"] += 1
+        if pair.has_gold_template:
+            stats["fallback_gold_pairs_considered"] += 1
+        else:
+            stats["fallback_no_gold_pairs_considered"] += 1
+
+    stats["fallback_pairs_considered"] = len(pairs)
+    stats["fallback_unique_edges_added"] = len(fallback_edges)
+    stats["target_relation_edges_skipped"] = target_relation_edges_skipped
+    stats["pseudo_labels_created"] = 0
+    return fallback_edges, {
+        "enabled": True,
+        "no_evidence_pairs": str(no_evidence_pairs_path),
+        "pair_scope": pair_scope,
+        "include_two_hop_bridges": include_two_hop_bridges,
+        "include_three_hop_bridges": include_three_hop_bridges,
+        "include_neighbor_union": include_neighbor_union,
+        "max_drug_edges_per_pair": max_drug_edges_per_pair,
+        "max_endpoint_edges_per_pair": max_endpoint_edges_per_pair,
+        "max_bridge_edges_per_pair": max_bridge_edges_per_pair,
+        "stats": dict(sorted(stats.items())),
+        "average_fallback_edges_per_pair": sum(per_pair_edge_counts.values()) / len(per_pair_edge_counts)
+        if per_pair_edge_counts
+        else None,
+        "pairs_without_fallback_edges": sum(1 for count in per_pair_edge_counts.values() if count == 0),
+    }
+
+
 def read_gold_paths(path: str | Path) -> list[EvidencePath]:
     path = Path(path)
     rows: list[EvidencePath] = []
@@ -257,6 +508,12 @@ def build_path_subgraph(config: dict) -> dict:
         for path in train_gold_paths:
             edge_set.update(path.edges())
 
+    fallback_edges, fallback_report = build_fallback_structural_edges(
+        source_dir / "train1.txt",
+        config.get("fallback_structural_support", {}),
+    )
+    edge_set.update(fallback_edges)
+
     sorted_edges = sorted(edge_set, key=lambda edge: (edge[0], edge[1], edge[2]))
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -287,6 +544,7 @@ def build_path_subgraph(config: dict) -> dict:
         "selected_evidence_paths": len(selected_paths),
         "include_train_gold_paths": include_train_gold_paths,
         "train_gold_paths_added": len(train_gold_paths),
+        "fallback_structural_support": fallback_report,
         "selected_edges": len(edge_set),
         "selected_nodes": len(selected_nodes),
         "full_train1_edges": len(full_edge_set),
@@ -300,6 +558,9 @@ def build_path_subgraph(config: dict) -> dict:
             "non_train_evidence_paths_selected": sum(1 for path in selected_paths if path.split != "train"),
             "non_train_gold_paths_added": non_train_gold_paths_added,
             "target_relation_edges_in_train1": sum(1 for _, relation, _ in edge_set if relation == "affects_endpoint"),
+            "pseudo_labels_created_by_fallback": fallback_report.get("stats", {}).get(
+                "pseudo_labels_created", fallback_report.get("pseudo_labels_created", 0)
+            ),
         },
         "gold_path_coverage": compute_gold_path_coverage(gold_paths_file, edge_set),
     }

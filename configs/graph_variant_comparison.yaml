@@ -1,0 +1,18 @@
+gold_paths_file: data/cloud_run/all_data/gold_paths.tsv
+
+variants:
+  - name: full_graph
+    graph_dir: data/cloud_run/biopathnet_full
+    smoke_command: bash scripts/run_biopathnet_linux_smoke.sh
+  - name: k50_evidence_only
+    graph_dir: data/cloud_run/biopathnet_path_subgraph_k50
+    report: data/cloud_run/biopathnet_path_subgraph_k50/path_subgraph_report.json
+    smoke_command: bash scripts/run_biopathnet_linux_subgraph_k50_smoke.sh
+  - name: k50_fallback_structural
+    graph_dir: data/cloud_run/biopathnet_path_subgraph_k50_fallback
+    report: data/cloud_run/biopathnet_path_subgraph_k50_fallback/path_subgraph_report.json
+    smoke_command: bash scripts/run_biopathnet_linux_subgraph_k50_fallback_smoke.sh
+
+output:
+  summary_tsv: data/cloud_run/reports/graph_variant_comparison.tsv
+  summary_json: data/cloud_run/reports/graph_variant_comparison.json

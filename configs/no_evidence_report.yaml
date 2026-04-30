@@ -1,0 +1,14 @@
+data:
+  train_pairs: data/cloud_run/splits/train.tsv
+  kg_train: data/cloud_run/biopathnet_full/train1.txt
+  entity_types: data/cloud_run/biopathnet_full/entity_types.txt
+  conversion_report: data/cloud_run/all_data/conversion_report.json
+  gold_labels_train: data/cloud_run/templates/gold_template_labels_train.tsv
+  evidence_paths_train: data/cloud_run/gold_template/evidence_paths_train.tsv
+
+output:
+  no_evidence_pairs: data/cloud_run/reports/no_evidence_pairs_train.tsv
+  summary_json: data/cloud_run/reports/no_evidence_pair_report.json
+
+analysis:
+  max_sample_items: 5

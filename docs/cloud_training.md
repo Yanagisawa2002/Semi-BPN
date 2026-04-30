@@ -156,3 +156,55 @@ PROFILE_SECONDS=300 bash scripts/run_biopathnet_linux_subgraph_k50_profile_5min.
 This is a train-evidence path-union graph, not a dynamic per-pair subgraph
 loader. It is intended to test the speed and coverage tradeoff before deeper
 model changes.
+
+## 10. No-Evidence Report And Fallback Subgraph
+
+To diagnose train positives without retrieved evidence paths:
+
+```bash
+bash scripts/analyze_no_evidence_pairs.sh
+```
+
+Outputs:
+
+```text
+data/cloud_run/reports/no_evidence_pairs_train.tsv
+data/cloud_run/reports/no_evidence_pair_report.json
+```
+
+Then build the K=50 graph with fallback structural support:
+
+```bash
+bash scripts/build_path_subgraph_k50_fallback.sh
+```
+
+The fallback variant adds local train-graph structure for no-evidence train
+positive pairs only. It does not create pseudo-template labels and it rejects
+non-train or negative fallback pairs.
+
+Output:
+
+```text
+data/cloud_run/biopathnet_path_subgraph_k50_fallback/
+```
+
+Run the fallback smoke / profiling jobs:
+
+```bash
+bash scripts/run_biopathnet_linux_subgraph_k50_fallback_smoke.sh
+PROFILE_SECONDS=300 bash scripts/run_biopathnet_linux_subgraph_k50_fallback_profile_5min.sh
+```
+
+Compare graph sizes and coverage for the full graph, K=50 evidence-only graph,
+and K=50 plus fallback support:
+
+```bash
+bash scripts/compare_graph_variants.sh
+```
+
+Outputs:
+
+```text
+data/cloud_run/reports/graph_variant_comparison.tsv
+data/cloud_run/reports/graph_variant_comparison.json
+```
