@@ -304,12 +304,21 @@ def _patch_torchdrug_engine_progress(*, progress_bar: bool, log_interval_batches
     Engine.train = train
 
 
+def _load_trusted_torch_checkpoint(torch_module, checkpoint: str, device):
+    """Load a checkpoint created by our own training script across PyTorch versions."""
+
+    try:
+        return torch_module.load(checkpoint, map_location=device, weights_only=False)
+    except TypeError:
+        return torch_module.load(checkpoint, map_location=device)
+
+
 def _solver_load_without_graphs(solver, checkpoint: str, *, load_optimizer: bool = True) -> None:
     import torch
     from torchdrug.utils import comm
 
     checkpoint = os.path.expanduser(checkpoint)
-    state = torch.load(checkpoint, map_location=solver.device)
+    state = _load_trusted_torch_checkpoint(torch, checkpoint, solver.device)
     for key in [
         "fact_graph",
         "fact_graph_supervision",

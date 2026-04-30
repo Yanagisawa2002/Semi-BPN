@@ -5,6 +5,7 @@ import uuid
 from mechrep.training.run_original_biopathnet_linux import (
     _config_path_from_argv,
     _evaluate_with_runtime_controls,
+    _load_trusted_torch_checkpoint,
     _runtime_options_from_config,
     _uses_runtime_controls,
     original_biopathnet_root,
@@ -90,3 +91,40 @@ def test_eval_num_negative_is_temporary():
     assert metric == {"mrr": 0.0}
     assert solver.seen == ("valid", 4096)
     assert solver.model.num_negative == 4
+
+
+def test_trusted_checkpoint_loader_disables_weights_only_when_supported():
+    class FakeTorch:
+        def __init__(self):
+            self.calls = []
+
+        def load(self, checkpoint, **kwargs):
+            self.calls.append((checkpoint, kwargs))
+            return {"ok": True}
+
+    fake_torch = FakeTorch()
+
+    assert _load_trusted_torch_checkpoint(fake_torch, "model_epoch_1.pth", "cuda:0") == {"ok": True}
+    assert fake_torch.calls == [
+        ("model_epoch_1.pth", {"map_location": "cuda:0", "weights_only": False}),
+    ]
+
+
+def test_trusted_checkpoint_loader_supports_old_torch_without_weights_only():
+    class FakeTorch:
+        def __init__(self):
+            self.calls = []
+
+        def load(self, checkpoint, **kwargs):
+            self.calls.append((checkpoint, kwargs))
+            if "weights_only" in kwargs:
+                raise TypeError("unexpected keyword argument 'weights_only'")
+            return {"ok": True}
+
+    fake_torch = FakeTorch()
+
+    assert _load_trusted_torch_checkpoint(fake_torch, "model_epoch_1.pth", "cpu") == {"ok": True}
+    assert fake_torch.calls == [
+        ("model_epoch_1.pth", {"map_location": "cpu", "weights_only": False}),
+        ("model_epoch_1.pth", {"map_location": "cpu"}),
+    ]
