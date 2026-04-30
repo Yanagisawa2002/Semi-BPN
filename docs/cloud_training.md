@@ -130,3 +130,29 @@ Do not start with the original large BioPathNet config. Scale in this order:
 
 If the 5090 runs out of memory on the full graph, use it for smoke/profiling
 only and move full training to an 80GB GPU.
+
+## 9. Path-Subgraph K=50 Variant
+
+The K=50 accelerated variant builds a standard BioPathNet data directory from
+the union of top-50 train evidence paths per pair:
+
+```bash
+bash scripts/build_path_subgraph_k50.sh
+```
+
+The output is:
+
+```text
+data/cloud_run/biopathnet_path_subgraph_k50/
+```
+
+Then run:
+
+```bash
+bash scripts/run_biopathnet_linux_subgraph_k50_smoke.sh
+PROFILE_SECONDS=300 bash scripts/run_biopathnet_linux_subgraph_k50_profile_5min.sh
+```
+
+This is a train-evidence path-union graph, not a dynamic per-pair subgraph
+loader. It is intended to test the speed and coverage tradeoff before deeper
+model changes.

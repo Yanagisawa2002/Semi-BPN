@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
 pytest-tmp/
+.test_tmp/
 
 # Runtime caches
 .torch_extensions/
@@ -14,13 +15,13 @@ pytest-tmp/
 .venv/
 venv/
 env/
-deps/
+/deps/
 biopathnet/_download/
 
 # Large local data and generated outputs are synchronized separately.
-data/
-results/
-all_data(indication_only)/
+/data/
+/results/
+/all_data(indication_only)/
 
 # Model artifacts
 *.pt
