@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import random
@@ -27,6 +28,7 @@ from mechrep.models.losses import joint_gold_template_loss
 from mechrep.models.template_head import TemplateHead
 from mechrep.templates.extract_templates import make_template_id
 from mechrep.templates.template_vocab import TemplateVocab, build_template_vocab
+from mechrep.training.progress import EarlyStopper, iter_progress, normalize_monitor_metric
 
 
 PREDICTION_COLUMNS = (
@@ -184,6 +186,14 @@ def train_one_model(
     weight_decay: float,
     lambda_gold: float,
     seed: int,
+    valid_examples: Sequence[GoldTemplateExample] | None = None,
+    template_vocab: TemplateVocab | None = None,
+    k_values: Sequence[int] = (10, 50, 100),
+    group_by: str | None = "endpoint_id",
+    early_stopping_metric: str | None = None,
+    patience: int | None = None,
+    min_delta: float = 0.0,
+    progress_bar: bool = True,
 ) -> List[dict]:
     optimizer = torch.optim.Adam(
         list(encoder.parameters()) + list(template_head.parameters()),
@@ -191,7 +201,12 @@ def train_one_model(
         weight_decay=weight_decay,
     )
     history = []
-    for epoch in range(epochs):
+    stopper = EarlyStopper(early_stopping_metric, patience, min_delta=min_delta)
+    monitor_key = normalize_monitor_metric(early_stopping_metric or "")
+    best_state = None
+
+    epoch_iter = iter_progress(range(epochs), enabled=progress_bar, desc="gold-template train", unit="epoch")
+    for epoch in epoch_iter:
         encoder.train()
         template_head.train()
         totals = {
@@ -201,7 +216,15 @@ def train_one_model(
             "num_examples": 0,
             "num_gold_template_examples": 0,
         }
-        for batch in batches(train_examples, batch_size=batch_size, seed=seed, epoch=epoch):
+        epoch_batches = batches(train_examples, batch_size=batch_size, seed=seed, epoch=epoch)
+        batch_iter = iter_progress(
+            epoch_batches,
+            enabled=progress_bar,
+            desc=f"epoch {epoch + 1}/{epochs}",
+            unit="batch",
+            leave=False,
+        )
+        for batch in batch_iter:
             drug_index, endpoint_index, pair_label, template_index = examples_to_tensors(
                 batch, drug_to_index, endpoint_to_index
             )
@@ -224,15 +247,50 @@ def train_one_model(
             totals["loss_total"] += float(loss_parts["loss_total"].detach()) * batch_size_actual
             totals["num_examples"] += batch_size_actual
             totals["num_gold_template_examples"] += loss_parts["num_gold_template_examples_in_batch"]
-        history.append(
-            {
-                "epoch": epoch + 1,
-                "loss_pred": totals["loss_pred"] / totals["num_examples"],
-                "loss_gold": totals["loss_gold"] / totals["num_examples"],
-                "loss_total": totals["loss_total"] / totals["num_examples"],
-                "num_gold_template_examples": totals["num_gold_template_examples"],
-            }
-        )
+        epoch_record = {
+            "epoch": epoch + 1,
+            "loss_pred": totals["loss_pred"] / totals["num_examples"],
+            "loss_gold": totals["loss_gold"] / totals["num_examples"],
+            "loss_total": totals["loss_total"] / totals["num_examples"],
+            "num_gold_template_examples": totals["num_gold_template_examples"],
+        }
+        if stopper.enabled:
+            if valid_examples is None or template_vocab is None:
+                raise ValueError("early stopping requires valid_examples and template_vocab")
+            valid_rows = predict_examples(
+                encoder,
+                template_head,
+                valid_examples,
+                drug_to_index,
+                endpoint_to_index,
+                template_vocab,
+            )
+            valid_metrics = evaluate_gold_template_predictions(
+                valid_rows,
+                k_values=k_values,
+                group_by=group_by,
+                num_templates=template_vocab.size,
+            )
+            if monitor_key not in valid_metrics:
+                raise ValueError(f"early stopping metric {monitor_key!r} is not available in validation metrics")
+            monitor_value = float(valid_metrics[monitor_key])
+            improved, should_stop = stopper.observe(monitor_value, epoch=epoch + 1)
+            epoch_record[early_stopping_metric or monitor_key] = monitor_value
+            epoch_record["early_stop_bad_epochs"] = stopper.bad_epochs
+            if improved:
+                best_state = {
+                    "encoder": copy.deepcopy(encoder.state_dict()),
+                    "template_head": copy.deepcopy(template_head.state_dict()),
+                }
+            if should_stop:
+                epoch_record["early_stopped"] = True
+                history.append(epoch_record)
+                break
+        history.append(epoch_record)
+
+    if best_state is not None:
+        encoder.load_state_dict(best_state["encoder"])
+        template_head.load_state_dict(best_state["template_head"])
     return history
 
 
@@ -331,6 +389,12 @@ def run_gold_template_training(config: dict, *, create_toy_data_if_missing: bool
         dropout=float(model_config.get("dropout", 0.0)),
     )
 
+    eval_config = config.get("evaluation", {})
+    k_values = [int(k) for k in eval_config.get("k_values", [10, 50, 100])]
+    group_by = eval_config.get("group_by", "endpoint_id")
+    if group_by in ("", "none", "None", None):
+        group_by = None
+
     training_config = config.get("training", {})
     loss_config = config.get("loss", {})
     history = train_one_model(
@@ -345,13 +409,15 @@ def run_gold_template_training(config: dict, *, create_toy_data_if_missing: bool
         weight_decay=float(training_config.get("weight_decay", 0.0)),
         lambda_gold=float(loss_config.get("lambda_gold", 1.0)),
         seed=seed,
+        valid_examples=dataset.examples("valid"),
+        template_vocab=template_vocab,
+        k_values=k_values,
+        group_by=group_by,
+        early_stopping_metric=training_config.get("early_stopping_metric"),
+        patience=training_config.get("patience"),
+        min_delta=float(training_config.get("min_delta", 0.0)),
+        progress_bar=bool(training_config.get("progress_bar", True)),
     )
-
-    eval_config = config.get("evaluation", {})
-    k_values = [int(k) for k in eval_config.get("k_values", [10, 50, 100])]
-    group_by = eval_config.get("group_by", "endpoint_id")
-    if group_by in ("", "none", "None", None):
-        group_by = None
 
     prediction_rows = {}
     metrics = {}

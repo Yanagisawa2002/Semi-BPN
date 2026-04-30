@@ -160,7 +160,148 @@ def _runtime_options_from_config(config_path: Path | None) -> dict[str, Any]:
 
 
 def _uses_runtime_controls(runtime: dict[str, Any]) -> bool:
-    return bool(runtime.get("skip_eval", False)) or runtime.get("eval_num_negative") is not None
+    return (
+        bool(runtime.get("skip_eval", False))
+        or runtime.get("eval_num_negative") is not None
+        or runtime.get("progress_bar") is not None
+        or runtime.get("progress_log_interval") is not None
+        or runtime.get("early_stop_patience") is not None
+    )
+
+
+def _patch_torchdrug_engine_progress(*, progress_bar: bool, log_interval_batches: int | None) -> None:
+    """Add optional tqdm and line-based progress logging to TorchDrug Engine.train."""
+
+    if not progress_bar and not log_interval_batches:
+        return
+
+    try:
+        import logging
+        import torch
+        from itertools import islice
+        from torch import nn
+        from torch.utils import data as torch_data
+        from torchdrug import data, utils
+        from torchdrug.core.engine import Engine
+        from torchdrug.utils import comm
+    except Exception:
+        return
+
+    tqdm = None
+    if progress_bar:
+        try:
+            from tqdm.auto import tqdm as tqdm
+        except ImportError:
+            tqdm = None
+
+    if getattr(Engine.train, "_mechrep_tqdm_patch", False):
+        return
+
+    progress_logger = logging.getLogger(__name__)
+    log_interval_batches = int(log_interval_batches or 0)
+
+    def _metric_postfix(metric: dict[str, Any]) -> dict[str, float]:
+        postfix = {}
+        for key, value in list(metric.items())[:3]:
+            if isinstance(value, torch.Tensor):
+                value = value.detach()
+                if value.numel() != 1:
+                    continue
+                value = value.item()
+            try:
+                postfix[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return postfix
+
+    def train(self, num_epoch=1, batch_per_epoch=None):
+        sampler = torch_data.DistributedSampler(self.train_set, self.world_size, self.rank)
+        dataloader = data.DataLoader(self.train_set, self.batch_size, sampler=sampler, num_workers=self.num_worker)
+        batch_per_epoch_resolved = batch_per_epoch or len(dataloader)
+        model = self.model
+        model.split = "train"
+        if self.world_size > 1:
+            if self.device.type == "cuda":
+                model = nn.parallel.DistributedDataParallel(
+                    model,
+                    device_ids=[self.device],
+                    find_unused_parameters=True,
+                )
+            else:
+                model = nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
+        model.train()
+
+        train_start_epoch = self.epoch
+        train_total_epoch = train_start_epoch + num_epoch
+
+        for epoch in self.meter(num_epoch):
+            sampler.set_epoch(epoch)
+
+            metrics = []
+            start_id = 0
+            gradient_interval = min(batch_per_epoch_resolved - start_id, self.gradient_interval)
+            batches = islice(dataloader, batch_per_epoch_resolved)
+            if self.rank == 0 and tqdm is not None:
+                batches = tqdm(
+                    batches,
+                    total=batch_per_epoch_resolved,
+                    desc=f"BioPathNet epoch {self.epoch + 1}",
+                    unit="batch",
+                    dynamic_ncols=True,
+                )
+
+            for batch_id, batch in enumerate(batches):
+                current_batch = batch_id + 1
+                if (
+                    self.rank == 0
+                    and log_interval_batches > 0
+                    and (
+                        current_batch == 1
+                        or current_batch % log_interval_batches == 0
+                        or current_batch == batch_per_epoch_resolved
+                    )
+                ):
+                    percent = current_batch / batch_per_epoch_resolved * 100
+                    progress_logger.warning(
+                        "BioPathNet progress: epoch %d/%d batch %d/%d (%.1f%%)",
+                        self.epoch + 1,
+                        train_total_epoch,
+                        current_batch,
+                        batch_per_epoch_resolved,
+                        percent,
+                    )
+
+                if self.device.type == "cuda":
+                    batch = utils.cuda(batch, device=self.device)
+
+                loss, metric = model(batch)
+                if not loss.requires_grad:
+                    raise RuntimeError("Loss doesn't require grad. Did you define any loss in the task?")
+                loss = loss / gradient_interval
+                loss.backward()
+                metrics.append(metric)
+
+                if batch_id - start_id + 1 == gradient_interval:
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+
+                    metric = utils.stack(metrics, dim=0)
+                    metric = utils.mean(metric, dim=0)
+                    if self.world_size > 1:
+                        metric = comm.reduce(metric, op="mean")
+                    self.meter.update(metric)
+                    if self.rank == 0 and hasattr(batches, "set_postfix"):
+                        batches.set_postfix(_metric_postfix(metric))
+
+                    metrics = []
+                    start_id = batch_id + 1
+                    gradient_interval = min(batch_per_epoch_resolved - start_id, self.gradient_interval)
+
+            if self.scheduler:
+                self.scheduler.step()
+
+    train._mechrep_tqdm_patch = True
+    Engine.train = train
 
 
 def _solver_load_without_graphs(solver, checkpoint: str, *, load_optimizer: bool = True) -> None:
@@ -205,13 +346,23 @@ def _evaluate_with_runtime_controls(solver, split: str, *, eval_num_negative: in
             solver.model.num_negative = old_num_negative
 
 
-def _train_and_validate_with_runtime_controls(cfg, solver, *, skip_eval: bool, eval_num_negative: int | None, logger):
+def _train_and_validate_with_runtime_controls(
+    cfg,
+    solver,
+    *,
+    skip_eval: bool,
+    eval_num_negative: int | None,
+    early_stop_patience: int | None,
+    early_stop_min_delta: float,
+    logger,
+):
     if cfg.train.num_epoch == 0:
         return solver
 
     step = math.ceil(cfg.train.num_epoch / 10)
     best_result = float("-inf")
     best_epoch = -1
+    bad_validations = 0
 
     for index in range(0, cfg.train.num_epoch, step):
         kwargs = cfg.train.copy()
@@ -230,11 +381,22 @@ def _train_and_validate_with_runtime_controls(cfg, solver, *, skip_eval: bool, e
             logger=logger,
         )
         result = metric[cfg.metric]
-        if result > best_result:
+        if result > best_result + early_stop_min_delta:
             best_result = result
             best_epoch = solver.epoch
+            bad_validations = 0
+        else:
+            bad_validations += 1
+            if early_stop_patience is not None and bad_validations >= early_stop_patience:
+                logger.warning(
+                    "Runtime early stopping: no %s improvement for %d validation checks; best epoch %d",
+                    cfg.metric,
+                    bad_validations,
+                    best_epoch,
+                )
+                break
 
-    if not skip_eval:
+    if not skip_eval and best_epoch >= 0:
         _solver_load_without_graphs(solver, "model_epoch_%d.pth" % best_epoch)
     return solver
 
@@ -282,18 +444,28 @@ def _run_original_with_runtime_controls(runtime: dict[str, Any]) -> None:
         logger.warning("Runtime controls: %s" % pprint.pformat(runtime))
 
     dataset = core.Configurable.load_config_dict(cfg.dataset)
+    _patch_torchdrug_engine_progress(
+        progress_bar=bool(runtime.get("progress_bar", True)),
+        log_interval_batches=runtime.get("progress_log_interval", 100),
+    )
     solver = util.build_solver(cfg, dataset)
 
     skip_eval = bool(runtime.get("skip_eval", False))
     eval_num_negative = runtime.get("eval_num_negative")
     if eval_num_negative is not None:
         eval_num_negative = int(eval_num_negative)
+    early_stop_patience = runtime.get("early_stop_patience")
+    if early_stop_patience is not None:
+        early_stop_patience = int(early_stop_patience)
+    early_stop_min_delta = float(runtime.get("early_stop_min_delta", 0.0))
 
     _train_and_validate_with_runtime_controls(
         cfg,
         solver,
         skip_eval=skip_eval,
         eval_num_negative=eval_num_negative,
+        early_stop_patience=early_stop_patience,
+        early_stop_min_delta=early_stop_min_delta,
         logger=logger,
     )
     _test_with_runtime_controls(

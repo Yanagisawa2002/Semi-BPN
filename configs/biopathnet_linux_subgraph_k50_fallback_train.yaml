@@ -36,11 +36,11 @@ engine:
   batch_size: 1
 
 train:
-  num_epoch: 1
+  num_epoch: 20
 
 metric: mrr
 fast_test: 16
-output_dir: results/biopathnet_linux_subgraph_k50_fallback_profile
+output_dir: results/biopathnet_linux_subgraph_k50_fallback_train
 
 runtime:
   skip_eval: true

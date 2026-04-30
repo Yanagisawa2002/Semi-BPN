@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import random
@@ -21,6 +22,7 @@ from mechrep.data.biopathnet_adapter import DEFAULT_RELATION_NAME, EndpointBioPa
 from mechrep.data.build_ood_splits import build_ood_splits
 from mechrep.data.build_pairs import PairRecord
 from mechrep.evaluation.eval_prediction import evaluate_predictions, write_metrics_json
+from mechrep.training.progress import EarlyStopper, iter_progress, normalize_monitor_metric
 
 
 PREDICTION_COLUMNS = ("pair_id", "drug_id", "endpoint_id", "label", "score", "split")
@@ -180,12 +182,23 @@ def train_model(
     epochs: int,
     learning_rate: float,
     weight_decay: float,
+    valid_records: Sequence[PairRecord] | None = None,
+    k_values: Sequence[int] = (10, 50, 100),
+    group_by: str | None = "endpoint_id",
+    early_stopping_metric: str | None = None,
+    patience: int | None = None,
+    min_delta: float = 0.0,
+    progress_bar: bool = True,
 ) -> List[float]:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     criterion = nn.BCEWithLogitsLoss()
     drug_index, endpoint_index, labels = records_to_tensors(train_records, drug_to_index, endpoint_to_index)
     losses = []
-    for _ in range(epochs):
+    stopper = EarlyStopper(early_stopping_metric, patience, min_delta=min_delta)
+    monitor_key = normalize_monitor_metric(early_stopping_metric or "")
+    best_state = None
+
+    for epoch in iter_progress(range(epochs), enabled=progress_bar, desc="baseline train", unit="epoch"):
         model.train()
         optimizer.zero_grad()
         logits = model(drug_index, endpoint_index)
@@ -193,6 +206,28 @@ def train_model(
         loss.backward()
         optimizer.step()
         losses.append(float(loss.detach().cpu()))
+
+        if stopper.enabled:
+            if valid_records is None:
+                raise ValueError("early stopping requires valid_records")
+            _, valid_metrics = evaluate_split(
+                model,
+                valid_records,
+                drug_to_index,
+                endpoint_to_index,
+                k_values=k_values,
+                group_by=group_by,
+            )
+            if monitor_key not in valid_metrics:
+                raise ValueError(f"early stopping metric {monitor_key!r} is not available in validation metrics")
+            improved, should_stop = stopper.observe(float(valid_metrics[monitor_key]), epoch=epoch + 1)
+            if improved:
+                best_state = copy.deepcopy(model.state_dict())
+            if should_stop:
+                break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
     return losses
 
 
@@ -233,6 +268,12 @@ def run_baseline(config: dict, *, create_toy_data_if_missing: bool = False) -> d
         embedding_dim=int(model_config.get("embedding_dim", 16)),
     )
     training_config = config.get("training", {})
+    eval_config = config.get("evaluation", {})
+    k_values = [int(k) for k in eval_config.get("k_values", [10, 50, 100])]
+    group_by = eval_config.get("group_by", "endpoint_id")
+    if group_by in ("", "none", "None", None):
+        group_by = None
+
     losses = train_model(
         model,
         adapter.records("train"),
@@ -241,13 +282,14 @@ def run_baseline(config: dict, *, create_toy_data_if_missing: bool = False) -> d
         epochs=int(training_config.get("epochs", 50)),
         learning_rate=float(training_config.get("learning_rate", 0.05)),
         weight_decay=float(training_config.get("weight_decay", 0.0)),
+        valid_records=adapter.records("valid"),
+        k_values=k_values,
+        group_by=group_by,
+        early_stopping_metric=training_config.get("early_stopping_metric"),
+        patience=training_config.get("patience"),
+        min_delta=float(training_config.get("min_delta", 0.0)),
+        progress_bar=bool(training_config.get("progress_bar", True)),
     )
-
-    eval_config = config.get("evaluation", {})
-    k_values = [int(k) for k in eval_config.get("k_values", [10, 50, 100])]
-    group_by = eval_config.get("group_by", "endpoint_id")
-    if group_by in ("", "none", "None", None):
-        group_by = None
 
     prediction_rows = {}
     metrics = {}

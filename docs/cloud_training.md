@@ -208,6 +208,20 @@ bash scripts/run_biopathnet_linux_subgraph_k50_fallback_smoke.sh
 PROFILE_SECONDS=300 bash scripts/run_biopathnet_linux_subgraph_k50_fallback_profile_5min.sh
 ```
 
+Run the first original BioPathNet baseline training job on the K=50 fallback
+graph:
+
+```bash
+bash scripts/run_biopathnet_linux_subgraph_k50_fallback_train.sh
+```
+
+By default this runs 20 epochs and skips the original full ranking evaluation.
+Override the epoch count with:
+
+```bash
+TRAIN_EPOCHS=50 bash scripts/run_biopathnet_linux_subgraph_k50_fallback_train.sh
+```
+
 Compare graph sizes and coverage for the full graph, K=50 evidence-only graph,
 and K=50 plus fallback support:
 

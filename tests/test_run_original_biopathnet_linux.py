@@ -40,6 +40,8 @@ def test_runtime_control_helpers_parse_skip_eval():
                     "runtime:",
                     "  skip_eval: true",
                     "  eval_num_negative: 4096",
+                    "  progress_bar: true",
+                    "  progress_log_interval: 100",
                 ]
             ),
             encoding="utf-8",
@@ -47,8 +49,14 @@ def test_runtime_control_helpers_parse_skip_eval():
 
         assert _config_path_from_argv(["-s", "42", "-c", str(config)]) == config
         runtime = _runtime_options_from_config(config)
-        assert runtime == {"skip_eval": True, "eval_num_negative": 4096}
+        assert runtime == {
+            "skip_eval": True,
+            "eval_num_negative": 4096,
+            "progress_bar": True,
+            "progress_log_interval": 100,
+        }
         assert _uses_runtime_controls(runtime)
+        assert _uses_runtime_controls({"progress_log_interval": 100})
         assert not _uses_runtime_controls({})
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

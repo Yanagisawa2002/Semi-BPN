@@ -46,3 +46,5 @@ metric: mrr
 runtime:
   skip_eval: true
   eval_num_negative: 4096
+  progress_bar: true
+  progress_log_interval: 100

@@ -45,3 +45,5 @@ output_dir: results/biopathnet_linux_subgraph_k50_fallback_smoke
 runtime:
   skip_eval: true
   eval_num_negative: 4096
+  progress_bar: true
+  progress_log_interval: 100
