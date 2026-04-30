@@ -159,6 +159,161 @@ def relation_counts_for_files(dataset_dir: str | Path, files: Sequence[str]) -> 
     return report
 
 
+def read_triplets(path: str | Path) -> list[tuple[str, str, str]]:
+    path = Path(path)
+    triplets = []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        for row_number, row in enumerate(reader, start=1):
+            if len(row) != 3:
+                raise ValueError(f"{path}:{row_number} contains a non-triplet row: {row}")
+            triplets.append((row[0], row[1], row[2]))
+    if not triplets:
+        raise ValueError(f"{path} contains no triplets")
+    return triplets
+
+
+def limit_triplets(
+    triplets: Sequence[tuple[str, str, str]],
+    *,
+    max_triplets: int,
+    seed: int,
+) -> list[tuple[str, str, str]]:
+    if max_triplets <= 0 or len(triplets) <= max_triplets:
+        return list(triplets)
+    rng = random.Random(seed)
+    return sorted(rng.sample(list(triplets), max_triplets))
+
+
+def _training_objective_rows_from_scores(scores, *, direction: str, batch_offset: int) -> list[dict]:
+    rows = []
+    for row_index in range(scores.shape[0]):
+        example_id = batch_offset + row_index
+        rows.append(
+            {
+                "pair_id": f"{direction}:{example_id}:positive",
+                "drug_id": "",
+                "endpoint_id": "",
+                "label": "1",
+                "score": f"{float(scores[row_index, 0]):.8f}",
+                "split": f"train_internal_{direction}",
+            }
+        )
+        for negative_index in range(1, scores.shape[1]):
+            rows.append(
+                {
+                    "pair_id": f"{direction}:{example_id}:negative:{negative_index}",
+                    "drug_id": "",
+                    "endpoint_id": "",
+                    "label": "0",
+                    "score": f"{float(scores[row_index, negative_index]):.8f}",
+                    "split": f"train_internal_{direction}",
+                }
+            )
+    return rows
+
+
+def score_training_objective_negatives(
+    *,
+    dataset,
+    solver,
+    dataset_dir: str | Path,
+    max_positive_triples: int,
+    batch_size: int,
+    sampling_seed: int,
+) -> dict:
+    """Score positives against BioPathNet's own strict negatives.
+
+    BioPathNet splits a training batch in half: the first half is tail corruption
+    and the second half is head corruption. This report checks whether the
+    checkpoint separates positives from those internally sampled negatives.
+    """
+
+    import torch
+
+    if batch_size < 2:
+        raise ValueError("training negative diagnostic requires batch_size >= 2")
+    if batch_size % 2 != 0:
+        raise ValueError(f"training negative diagnostic requires an even batch_size, got {batch_size}")
+
+    triplets = read_triplets(Path(dataset_dir) / "train2.txt")
+    triplets = limit_triplets(triplets, max_triplets=max_positive_triples, seed=sampling_seed)
+    usable_length = len(triplets) - (len(triplets) % batch_size)
+    if usable_length <= 0:
+        raise ValueError(
+            f"Not enough train2 triplets ({len(triplets)}) for training negative diagnostic batch_size={batch_size}"
+        )
+    triplets = triplets[:usable_length]
+
+    missing = []
+    encoded = []
+    for head, relation, tail in triplets:
+        if head not in dataset.inv_entity_vocab:
+            missing.append(("head", head))
+        if tail not in dataset.inv_entity_vocab:
+            missing.append(("tail", tail))
+        if relation not in dataset.inv_relation_vocab:
+            missing.append(("relation", relation))
+        if missing:
+            break
+        encoded.append(
+            (
+                dataset.inv_entity_vocab[head],
+                dataset.inv_entity_vocab[tail],
+                dataset.inv_relation_vocab[relation],
+            )
+        )
+    if missing:
+        raise ValueError(f"train2 contains ids missing from BioPathNet vocabularies: {missing[:10]}")
+
+    task = solver.model
+    device = solver.device
+    task.eval()
+    all_rows = []
+    tail_rows = []
+    head_rows = []
+    all_loss = torch.tensor(0.0, device=device)
+    with torch.no_grad():
+        for start in range(0, len(encoded), batch_size):
+            batch = torch.tensor(encoded[start : start + batch_size], dtype=torch.long, device=device)
+            scores = torch.sigmoid(task.predict(batch, all_loss=all_loss, metric={})).detach().cpu()
+            half = batch_size // 2
+            tail_batch_rows = _training_objective_rows_from_scores(
+                scores[:half],
+                direction="tail",
+                batch_offset=start,
+            )
+            head_batch_rows = _training_objective_rows_from_scores(
+                scores[half:],
+                direction="head",
+                batch_offset=start + half,
+            )
+            tail_rows.extend(tail_batch_rows)
+            head_rows.extend(head_batch_rows)
+            all_rows.extend(tail_batch_rows)
+            all_rows.extend(head_batch_rows)
+
+    def metrics_for(rows: Sequence[dict]) -> dict:
+        metrics = evaluate_predictions(rows, k_values=[], group_by=None)
+        metrics["score_distribution"] = summarize_scores(rows)
+        metrics["num_examples"] = len(rows)
+        metrics["num_positive"] = sum(int(row["label"]) for row in rows)
+        metrics["num_negative"] = len(rows) - metrics["num_positive"]
+        return metrics
+
+    return {
+        "num_positive_triples_scored": len(encoded),
+        "num_positive_triples_available": len(read_triplets(Path(dataset_dir) / "train2.txt")),
+        "num_negative_per_positive": int(task.num_negative),
+        "batch_size": batch_size,
+        "sampling_seed": sampling_seed,
+        "max_positive_triples": max_positive_triples,
+        "all": metrics_for(all_rows),
+        "tail_corruption": metrics_for(tail_rows),
+        "head_corruption": metrics_for(head_rows),
+    }
+
+
 def factgraph_support_report(
     dataset_dir: str | Path,
     records_by_split: dict[str, Sequence[PairRecord]],
@@ -236,6 +391,9 @@ def run_diagnostic(
     max_records_per_split: int,
     sampling_seed: int,
     include_factgraph_support: bool,
+    include_training_negative_diagnostic: bool,
+    max_training_positive_triples: int,
+    training_negative_batch_size: int,
     progress_bar: bool,
 ) -> dict:
     root = repository_root()
@@ -292,6 +450,17 @@ def run_diagnostic(
     }
     if include_factgraph_support:
         report["factgraph_support"] = factgraph_support_report(dataset_dir, available_records)
+    if include_training_negative_diagnostic:
+        training_negative_report = score_training_objective_negatives(
+            dataset=dataset,
+            solver=solver,
+            dataset_dir=dataset_dir,
+            max_positive_triples=max_training_positive_triples,
+            batch_size=training_negative_batch_size,
+            sampling_seed=sampling_seed,
+        )
+        report["training_negative_diagnostic"] = training_negative_report
+        write_metrics_json(output_path / "training_negative_diagnostic.json", training_negative_report)
 
     for split in splits:
         rows = score_records(
@@ -345,6 +514,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-records-per-split", type=int, default=0)
     parser.add_argument("--sampling-seed", type=int, default=42)
     parser.add_argument("--include-factgraph-support", action="store_true")
+    parser.add_argument("--include-training-negative-diagnostic", action="store_true")
+    parser.add_argument("--max-training-positive-triples", type=int, default=4096)
+    parser.add_argument("--training-negative-batch-size", type=int, default=16)
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
 
@@ -368,6 +540,9 @@ def main() -> None:
         max_records_per_split=args.max_records_per_split,
         sampling_seed=args.sampling_seed,
         include_factgraph_support=args.include_factgraph_support,
+        include_training_negative_diagnostic=args.include_training_negative_diagnostic,
+        max_training_positive_triples=args.max_training_positive_triples,
+        training_negative_batch_size=args.training_negative_batch_size,
         progress_bar=not args.no_progress,
     )
     print(json.dumps(result, indent=2, sort_keys=True))

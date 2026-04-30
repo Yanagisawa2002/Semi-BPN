@@ -6,6 +6,8 @@ from mechrep.evaluation.diagnose_original_biopathnet_pairs import (
     endpoint_overlap_report,
     factgraph_support_report,
     limit_records,
+    limit_triplets,
+    read_triplets,
     relation_counts_for_files,
     summarize_pair_records,
     summarize_scores,
@@ -43,6 +45,35 @@ def test_limit_records_is_deterministic_and_label_balanced():
     assert left == right
     assert len(left) == 6
     assert sum(record.label for record in left) == 3
+
+
+def test_read_and_limit_triplets_are_deterministic():
+    dataset_dir = Path("results/test_tmp/diagnose_original_biopathnet_pairs/triplets")
+    shutil.rmtree(dataset_dir.parent, ignore_errors=True)
+    dataset_dir.mkdir(parents=True)
+    path = dataset_dir / "train2.txt"
+    path.write_text(
+        "\n".join(
+            [
+                "d1\tr\te1",
+                "d2\tr\te2",
+                "d3\tr\te3",
+                "d4\tr\te4",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    triplets = read_triplets(path)
+    limited_left = limit_triplets(triplets, max_triplets=2, seed=5)
+    limited_right = limit_triplets(triplets, max_triplets=2, seed=5)
+
+    assert triplets[0] == ("d1", "r", "e1")
+    assert limited_left == limited_right
+    assert len(limited_left) == 2
+
+    shutil.rmtree(dataset_dir.parent, ignore_errors=True)
 
 
 def test_endpoint_overlap_report_flags_train_test_overlap():

@@ -12,6 +12,8 @@ NUM_NEGATIVE="${NUM_NEGATIVE:-4}"
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-5}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-1}"
 MAX_RECORDS_PER_SPLIT="${MAX_RECORDS_PER_SPLIT:-0}"
+MAX_TRAINING_POSITIVE_TRIPLES="${MAX_TRAINING_POSITIVE_TRIPLES:-4096}"
+TRAINING_NEGATIVE_BATCH_SIZE="${TRAINING_NEGATIVE_BATCH_SIZE:-16}"
 SAMPLING_SEED="${SAMPLING_SEED:-42}"
 RUN_NAME="${RUN_NAME:-d${HIDDEN_DIM}_l${HIDDEN_LAYERS}_neg${NUM_NEGATIVE}_b${TRAIN_BATCH_SIZE}_e${TRAIN_EPOCHS}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$PWD/results/biopathnet_linux_full_pairwise_diagnostic_${RUN_NAME}}"
@@ -79,6 +81,13 @@ OUTPUT_DIR="${OUTPUT_DIR:-${CHECKPOINT_DIR:-$OUTPUT_ROOT}/pairwise_diagnostic}"
 EXTRA_ARGS=()
 if [ "${INCLUDE_FACTGRAPH_SUPPORT:-1}" = "1" ]; then
   EXTRA_ARGS+=(--include-factgraph-support)
+fi
+if [ "${INCLUDE_TRAINING_NEGATIVE_DIAGNOSTIC:-1}" = "1" ]; then
+  EXTRA_ARGS+=(
+    --include-training-negative-diagnostic
+    --max-training-positive-triples "$MAX_TRAINING_POSITIVE_TRIPLES"
+    --training-negative-batch-size "$TRAINING_NEGATIVE_BATCH_SIZE"
+  )
 fi
 
 python -m mechrep.evaluation.diagnose_original_biopathnet_pairs \
