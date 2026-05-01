@@ -87,3 +87,21 @@ def test_pairwise_training_config_defaults_are_for_indication_debug():
     assert pairwise["validation_interval"] == 3
     assert pairwise["selection_metric"] == "auprc"
     assert pairwise["final_splits"] == ["train", "valid", "test"]
+
+
+def test_k50_fallback_pairwise_config_defaults_are_for_indication_debug():
+    config = yaml.safe_load(Path("configs/biopathnet_linux_k50_fallback_indication_pairwise.yaml").read_text(encoding="utf-8"))
+
+    assert config["dataset"]["path"] == "data/cloud_run/biopathnet_path_subgraph_k50_fallback_indication_debug"
+    assert config["train"]["num_epoch"] == 9
+    model = config["task"]["model"]
+    assert model["input_dim"] == 16
+    assert model["hidden_dims"] == [16, 16]
+    pairwise = config["pairwise_training"]
+    assert pairwise["split_dir"] == "data/cloud_run/splits"
+    assert pairwise["relation_name"] == "indication"
+    assert pairwise["train_batch_size"] == 16
+    assert pairwise["eval_batch_size"] == 64
+    assert pairwise["validation_interval"] == 3
+    assert pairwise["selection_metric"] == "auprc"
+    assert pairwise["final_splits"] == ["train", "valid", "test"]

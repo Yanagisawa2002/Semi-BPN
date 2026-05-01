@@ -5,6 +5,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mechrep.data.remap_biopathnet_relation import remap_biopathnet_relation
 
@@ -114,3 +116,18 @@ def test_remap_biopathnet_relation_rejects_target_relation_in_copied_fact_graph(
             raise AssertionError("Expected copied target relation rows to be rejected")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_k50_fallback_indication_prepare_config_remaps_only_supervision_files():
+    config = yaml.safe_load(
+        Path("configs/biopathnet_k50_fallback_indication_debug_prepare.yaml").read_text(encoding="utf-8")
+    )
+
+    assert config["source_dir"] == "data/cloud_run/biopathnet_path_subgraph_k50_fallback"
+    assert config["output_dir"] == "data/cloud_run/biopathnet_path_subgraph_k50_fallback_indication_debug"
+    assert config["source_relation"] == "affects_endpoint"
+    assert config["target_relation"] == "indication"
+    assert config["target_files"] == ["train2.txt", "valid.txt", "test.txt"]
+    assert "train1.txt" not in config["target_files"]
+    assert config["forbid_source_relation_in_copied_files"] is True
+    assert config["forbid_target_relation_in_copied_files"] is True
