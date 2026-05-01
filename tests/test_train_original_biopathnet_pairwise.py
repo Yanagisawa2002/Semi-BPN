@@ -1,15 +1,27 @@
 import sys
+import shutil
+import uuid
 from pathlib import Path
 
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mechrep.data.build_pairs import PairRecord
+from mechrep.data.gold_template_dataset import IGNORE_TEMPLATE_INDEX
+from mechrep.templates.template_vocab import TemplateVocab
 from mechrep.training.train_original_biopathnet_pairwise import (
     batch_records,
+    build_template_supervision,
     pairwise_options_from_config,
     should_validate_epoch,
+    template_options_from_config,
 )
+
+
+def _workspace_tmp_dir(name):
+    path = Path(__file__).resolve().parents[1] / ".test_tmp" / f"{name}_{uuid.uuid4().hex}"
+    path.mkdir(parents=True)
+    return path
 
 
 def test_pairwise_options_from_config_reads_explicit_training_block():
@@ -105,3 +117,118 @@ def test_k50_fallback_pairwise_config_defaults_are_for_indication_debug():
     assert pairwise["validation_interval"] == 3
     assert pairwise["selection_metric"] == "auprc"
     assert pairwise["final_splits"] == ["train", "valid", "test"]
+
+
+def test_k50_fallback_template_pairwise_config_defaults_are_for_gold_pseudo():
+    config = yaml.safe_load(
+        Path("configs/biopathnet_linux_k50_fallback_indication_template_pairwise.yaml").read_text(encoding="utf-8")
+    )
+
+    assert config["dataset"]["path"] == "data/cloud_run/biopathnet_path_subgraph_k50_fallback_indication_debug"
+    options = template_options_from_config(config)
+
+    assert options is not None
+    assert options.mode == "gold_pseudo"
+    assert options.template_vocab == Path("data/cloud_run/gold_template/template_vocab.json")
+    assert options.gold_labels_train == Path("data/cloud_run/templates/gold_template_labels_train.tsv")
+    assert options.pseudo_labels_by_split == {
+        "train": Path("data/cloud_run/pseudo_template_main/pseudo_template_labels_train.tsv")
+    }
+    assert options.assignment_report == Path("data/cloud_run/pseudo_template_main/assignment_report.json")
+    assert options.lambda_gold == 1.0
+    assert options.lambda_pseudo == 0.1
+    assert options.use_pseudo_splits == ("train",)
+
+
+def test_template_options_gold_mode_does_not_require_pseudo_labels():
+    config = {
+        "template_training": {
+            "enabled": True,
+            "mode": "gold",
+            "template_vocab": "vocab.json",
+            "gold_labels_train": "gold_train.tsv",
+            "gold_labels_valid": "gold_valid.tsv",
+            "gold_labels_test": "gold_test.tsv",
+            "use_pseudo_splits": [],
+            "lambda_gold": 1.0,
+            "lambda_pseudo": 0.0,
+        }
+    }
+
+    options = template_options_from_config(config)
+
+    assert options is not None
+    assert options.mode == "gold"
+    assert options.pseudo_labels_by_split == {}
+    assert options.use_pseudo_splits == ()
+    assert options.lambda_pseudo == 0.0
+
+
+def test_randomize_train_pseudo_control_keeps_gold_and_changes_pseudo():
+    tmp_path = _workspace_tmp_dir("pairwise_template_control")
+    try:
+        split_dir = tmp_path / "splits"
+        split_dir.mkdir()
+        for split in ("train", "valid", "test"):
+            rows = [
+                "pair_id\tdrug_id\tendpoint_id\tlabel\n",
+                f"{split}_gold\tD1\tE_{split}\t1\n",
+                f"{split}_pseudo\tD2\tE_{split}\t1\n",
+                f"{split}_neg\tD3\tE_{split}\t0\n",
+            ]
+            (split_dir / f"{split}.tsv").write_text("".join(rows), encoding="utf-8")
+
+        vocab = TemplateVocab.from_template_ids(["T_A", "T_B", "T_C"])
+        vocab_path = tmp_path / "template_vocab.json"
+        vocab.save(vocab_path)
+
+        label_header = "pair_id\tdrug_id\tendpoint_id\tsplit\ttemplate_ids\tprimary_template_id\tnum_gold_paths\n"
+        pseudo_header = (
+            "pair_id\tdrug_id\tendpoint_id\tsplit\tpseudo_template_id\tpseudo_template_index\tmatched_path_id\t"
+            "pair_score\ttemplate_match_score\tnormalized_path_score\tfinal_confidence\tassignment_source\n"
+        )
+        for split in ("train", "valid", "test"):
+            (tmp_path / f"gold_{split}.tsv").write_text(
+                label_header + f"{split}_gold\tD1\tE_{split}\t{split}\tT_A\tT_A\t1\n",
+                encoding="utf-8",
+            )
+        (tmp_path / "pseudo_train.tsv").write_text(
+            pseudo_header + "train_pseudo\tD2\tE_train\ttrain\tT_B\t1\tpath_1\t0.9\t1.0\t1.0\t0.95\ttest\n",
+            encoding="utf-8",
+        )
+
+        options = template_options_from_config(
+            {
+                "template_training": {
+                    "enabled": True,
+                    "mode": "random_pseudo",
+                    "template_vocab": str(vocab_path),
+                    "gold_labels_train": str(tmp_path / "gold_train.tsv"),
+                    "gold_labels_valid": str(tmp_path / "gold_valid.tsv"),
+                    "gold_labels_test": str(tmp_path / "gold_test.tsv"),
+                    "pseudo_labels_train": str(tmp_path / "pseudo_train.tsv"),
+                    "use_pseudo_splits": ["train"],
+                    "lambda_gold": 1.0,
+                    "lambda_pseudo": 0.1,
+                    "control_seed": 1,
+                }
+            }
+        )
+        records = {
+            split: [
+                PairRecord(pair_id=f"{split}_gold", drug_id="D1", endpoint_id=f"E_{split}", label=1, split=split),
+                PairRecord(pair_id=f"{split}_pseudo", drug_id="D2", endpoint_id=f"E_{split}", label=1, split=split),
+                PairRecord(pair_id=f"{split}_neg", drug_id="D3", endpoint_id=f"E_{split}", label=0, split=split),
+            ]
+            for split in ("train", "valid", "test")
+        }
+
+        supervision = build_template_supervision(records, options=options, template_vocab=vocab)
+
+        assert supervision["train"]["train_gold"].gold_template_id == "T_A"
+        assert supervision["train"]["train_gold"].pseudo_template_index == IGNORE_TEMPLATE_INDEX
+        assert supervision["train"]["train_pseudo"].has_pseudo_template is True
+        assert supervision["train"]["train_pseudo"].template_supervision_source == "random_pseudo"
+        assert supervision["valid"]["valid_pseudo"].has_pseudo_template is False
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)

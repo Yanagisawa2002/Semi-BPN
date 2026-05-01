@@ -53,6 +53,21 @@ def materialize_config(config_path: Path, output_path: Path, root: Path) -> dict
             if pairwise_training.get(key):
                 pairwise_training[key] = _absolute_path(str(pairwise_training[key]), root)
 
+    template_training = config.get("template_training")
+    if isinstance(template_training, dict):
+        for key in (
+            "template_vocab",
+            "gold_labels_train",
+            "gold_labels_valid",
+            "gold_labels_test",
+            "pseudo_labels_train",
+            "pseudo_labels_valid",
+            "pseudo_labels_test",
+            "assignment_report",
+        ):
+            if template_training.get(key):
+                template_training[key] = _absolute_path(str(template_training[key]), root)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
